@@ -1,0 +1,7 @@
+-Request form crashes when selecting/highlighting the e-transfer email when pre-populated, does not crash when no email given
+-if an artist has 2 requests close together, and one is confirmed, the other is not auto-declining
+-can also request new date beside a confirmed date (maybe calendar not working due to API?
+-after dismissing draft email, i still want to be able to access; dismiss should be more like minimize or collaps draft pane
+-i now see the email drafts 'unsent' at top of page, perhaps also keep the individual ones handy per request
+-More particulars
+Anything not covered by the core venue knowledge can be added here by the venue. The chatbot answers only from the core knowledge plus this text; everything else gets a human follow-up from info@bunkerstratford.com.; this can be removed for artist facing app
