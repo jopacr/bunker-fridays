@@ -6,6 +6,9 @@ import { CORE_FACTS, INFO_EMAIL } from "../lib/knowledge.js";
 import { getKb, addEscalation } from "./store.js";
 
 export async function chat({ history, contact }) {
+  // Accept either {text} or {content} from the client so a field-name mismatch
+  // can't silently blank the conversation.
+  history = (history || []).map((m) => ({ role: m.role, text: m.text ?? m.content ?? "" }));
   const q = history[history.length - 1]?.text || "";
   const kb = await getKb();
   const convo = history.map((m) => `${m.role === "user" ? "ARTIST" : "ASSISTANT"}: ${m.text}`).join("\n");

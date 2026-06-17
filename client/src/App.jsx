@@ -1196,7 +1196,7 @@ function AskPage({ ctx }) {
     try {
       // The server holds the knowledge base and the Anthropic key; it answers
       // from CORE_FACTS + venue notes and logs an escalation when it can't.
-      const apiHistory = history.map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }));
+      const apiHistory = history.map((m) => ({ role: m.role === "user" ? "user" : "assistant", text: m.text }));
       const r = await ctx.api.chat(apiHistory);
       setMsgs((p) => [...p, { role: "assistant", text: r.text, mailto: r.mailto || null }]);
     } catch (e) {
