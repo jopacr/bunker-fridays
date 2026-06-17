@@ -1,0 +1,12 @@
+{
+  "name": "bunker-fridays",
+  "version": "1.0.0",
+  "description": "Booking app for The Bunker",
+  "scripts": {
+    "build": "cd client && npm install && npm run build && cd ../server && npm install",
+    "start": "cd server && npm start"
+  },
+  "engines": {
+    "node": "22.22.2"
+  }
+}
