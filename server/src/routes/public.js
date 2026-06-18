@@ -16,6 +16,7 @@ import { verifyTurnstile } from "../services/turnstile.js";
 import { CORE_FACTS, INFO_EMAIL } from "../lib/knowledge.js";
 import { chat } from "../services/chatbot.js";
 import { requireArtist } from "../auth/sessions.js";
+import { pushToVenue } from "../services/push.js";
 import { publicArtist } from "../auth/artistAuth.js";
 import { r2Enabled, presignPhotoUpload } from "../services/r2.js";
 import { pushEnabled, publicKey } from "../services/push.js";
@@ -104,6 +105,8 @@ publicRoutes.post("/requests", async (req, res) => {
     }, run);
   });
   await audit(req.artistId ? `artist:${artistId}` : "guest", "request.submitted", "request", null, { dateISO, setType });
+  // Ping the venue desk so they see new requests without refreshing.
+  pushToVenue({ title: "New booking request", body: `${String(f.name).trim()} · ${setType === "single-originals" ? "originals" : "covers"} · ${fmtLong(dateISO)}`, tag: "new-request" }).catch(() => {});
   res.json({ ok: true, message: "Request sent. It shows as pending until the venue reviews it." });
 });
 

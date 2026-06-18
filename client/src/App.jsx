@@ -405,6 +405,28 @@ export default function App() {
     if (session) await loadArtistData(session);
   }
   // Desk view data: the full snapshot from /api/admin/state.
+  // Push notifications for the venue desk: subscribe once when the desk is open
+  // and the server has a VAPID key configured.
+  useEffect(() => {
+    if (!adminOk && !adminAuthed) return;
+    if (!info?.pushPublicKey) return;
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    (async () => {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const existing = await reg.pushManager.getSubscription();
+        if (existing) return; // already subscribed
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") return;
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(info.pushPublicKey),
+        });
+        await api.pushSubscribe(sub.toJSON());
+      } catch (e) { console.warn("push setup:", e); }
+    })();
+  }, [adminOk, adminAuthed, info?.pushPublicKey]);
+
   async function refreshDesk() {
     try {
       const st8 = await api.adminState();

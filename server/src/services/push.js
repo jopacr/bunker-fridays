@@ -28,3 +28,20 @@ export async function pushToArtist(artistId, payload) {
   }
   return { sent };
 }
+
+export async function pushToVenue(payload) {
+  if (!ready) return { sent: 0 };
+  const subs = await q("SELECT * FROM venue_push_subscriptions", []);
+  let sent = 0;
+  for (const s of subs) {
+    try {
+      await webpush.sendNotification(s.subscription, JSON.stringify(payload));
+      sent++;
+    } catch (e) {
+      if (e.statusCode === 404 || e.statusCode === 410) {
+        await q("DELETE FROM venue_push_subscriptions WHERE id = $1", [s.id]);
+      }
+    }
+  }
+  return { sent };
+}

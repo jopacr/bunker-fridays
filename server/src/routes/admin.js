@@ -19,7 +19,7 @@ import { confirmEmailDraft, declineEmailDraft, timeChangeEmailDraft, removalEmai
 import { runRecommendations } from "../lib/recommend.js";
 import { todayISO, fmtLong, fridaysAhead, iso } from "../lib/dates.js";
 import { sendEmail, mailerEnabled } from "../services/mailer.js";
-import { pushToArtist } from "../services/push.js";
+import { pushToArtist, pushToVenue } from "../services/push.js";
 
 export const adminRoutes = express.Router();
 adminRoutes.use(requireAdmin);
@@ -31,6 +31,14 @@ function publicSnap(snap) {
 }
 
 /* ---------- full desk state ---------- */
+adminRoutes.post("/push/subscribe", async (req, res) => {
+  const sub = req.body?.subscription;
+  if (!sub || !sub.endpoint) return res.status(400).json({ error: "Invalid subscription." });
+  const id = uid();
+  await q("INSERT INTO venue_push_subscriptions (id, subscription) VALUES ($1, $2) ON CONFLICT DO NOTHING", [id, JSON.stringify(sub)]);
+  res.json({ ok: true });
+});
+
 adminRoutes.get("/state", async (_req, res) => {
   const [snap, drafts, recConfig, escalations, kb] = await Promise.all([
     snapshot(), listDrafts(), getRecConfig(),
