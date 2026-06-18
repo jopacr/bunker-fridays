@@ -19,7 +19,9 @@ import { confirmEmailDraft, declineEmailDraft, timeChangeEmailDraft, removalEmai
 import { runRecommendations } from "../lib/recommend.js";
 import { todayISO, fmtLong, fridaysAhead, iso } from "../lib/dates.js";
 import { sendEmail, mailerEnabled } from "../services/mailer.js";
+import { config } from "../config.js";
 import { pushToArtist, pushToVenue } from "../services/push.js";
+import { sendSms, confirmSmsBody, smsEnabled } from "../services/sms.js";
 
 export const adminRoutes = express.Router();
 adminRoutes.use(requireAdmin);
@@ -75,6 +77,20 @@ adminRoutes.post("/requests/:id/decide", async (req, res) => {
     const d = confirmEmailDraft({ ...target, slotTime: plan.slotTime }, artist);
     const draft = await addDraft({ to: target.email, subject: d.subject, body: d.body, kind: "confirmation", label: `Confirmation · ${target.name} · ${fmtLong(target.date)}`, reqId: id });
     await audit(req.adminEmail, "request.approve", "request", id, { slot: plan.slotTime, autoDeclined: plan.autoDecline.length });
+
+    // Push notification to artist (silent if not subscribed or push not configured)
+    pushToArtist(target.artistId, {
+      title: "You're confirmed at The Bunker",
+      body: `${fmtLong(target.date)}${plan.slotTime ? ` · ${plan.slotTime}` : ""}. Check your email for details.`,
+      tag: "booking-confirmed",
+    }).catch(() => {});
+
+    // SMS to artist if they have a phone number and Twilio is configured
+    const phone = artist?.phone || target.phone || "";
+    if (phone && smsEnabled()) {
+      sendSms(phone, confirmSmsBody(target.name, fmtLong(target.date), plan.slotTime, config.infoEmail)).catch(() => {});
+    }
+
     return res.json({ ok: true, autoDeclined: plan.autoDecline.length, draft });
   }
 

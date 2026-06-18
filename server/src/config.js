@@ -16,7 +16,12 @@ export const config = {
   fromEmail: env.FROM_EMAIL || "The Bunker <bookings@bunkerstratford.com>",
   infoEmail: env.INFO_EMAIL || "info@bunkerstratford.com",
 
-  // Cloudflare Turnstile (§2 spam) — required on public request submission when configured
+  // Twilio (SMS confirmations to artists with a phone number on file)
+  twilio: {
+    accountSid: env.TWILIO_ACCOUNT_SID || "",
+    authToken: env.TWILIO_AUTH_TOKEN || "",
+    fromNumber: env.TWILIO_FROM_NUMBER || "",
+  },
   turnstileSecret: env.TURNSTILE_SECRET || "",
   turnstileSiteKey: env.TURNSTILE_SITE_KEY || "",
 
@@ -46,7 +51,7 @@ export function bootReport() {
   const off = [];
   if (!config.anthropicKey) off.push("chatbot (ANTHROPIC_API_KEY)");
   if (!config.resendKey) off.push("email sending (RESEND_API_KEY) — drafts still work, mailto/copy only");
-  if (!config.turnstileSecret) off.push("Turnstile verification (TURNSTILE_SECRET)");
+  if (!config.twilio.accountSid) off.push("SMS (TWILIO_ACCOUNT_SID) — confirmations will be email/push only");
   if (!config.r2.accessKeyId) off.push("photo uploads (R2_*)");
   if (!config.vapid.publicKey) off.push("push notifications (VAPID_*)");
   if (!config.wixWebhookSecret) off.push("Wix webhook (WIX_WEBHOOK_SECRET)");

@@ -1535,6 +1535,28 @@ function ProfileEditor({ ctx, artist }) {
           <button onClick={save} disabled={busy} style={{ ...st.amberBtn, opacity: busy ? 0.6 : 1 }}>{busy ? "Saving..." : "Save profile"}</button>
         </div>
       </div>
+
+      {ctx.info?.pushPublicKey && "serviceWorker" in navigator && "PushManager" in window && (
+        <div style={st.card}>
+          <div style={st.cardTitle}>Booking notifications</div>
+          <p style={{ ...st.p, marginTop: 4 }}>Get a notification on this device when The Bunker confirms your booking. Requires this app to be added to your home screen on iPhone.</p>
+          <button onClick={async () => {
+            try {
+              const permission = await Notification.requestPermission();
+              if (permission !== "granted") { ctx.flash("Notification permission was denied."); return; }
+              const reg = await navigator.serviceWorker.ready;
+              const existing = await reg.pushManager.getSubscription();
+              if (existing) await existing.unsubscribe();
+              const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(ctx.info.pushPublicKey) });
+              await ctx.api.artistPushSubscribe(sub.toJSON());
+              ctx.flash("Notifications enabled. You'll get a ping when your booking is confirmed.");
+            } catch (e) { ctx.flash(e.message || "Could not enable notifications."); }
+          }} style={st.ghostBtn}>
+            {Notification.permission === "granted" ? "Re-register this device" : "Enable booking notifications"}
+          </button>
+        </div>
+      )}
+
       <BlackoutCard ctx={ctx} artist={artist} />
     </div>
   );

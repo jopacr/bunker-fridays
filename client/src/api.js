@@ -35,6 +35,7 @@ export const api = {
   myPings: () => req("GET", "/me/pings"),
   markPingRead: (id) => req("POST", `/me/pings/${id}/read`),
   pushSubscribe: (subscription) => req("POST", "/admin/push/subscribe", { subscription }),
+  artistPushSubscribe: (subscription) => req("POST", "/me/push/subscribe", { subscription }),
   photoPresign: (contentType) => req("POST", "/me/photos/presign", { contentType }),
   savePhotos: (photos) => req("POST", "/me/photos", { photos }),
   chat: (history) => req("POST", "/chat", { history }),
