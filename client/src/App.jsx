@@ -2637,6 +2637,34 @@ function SecurityCard({ ctx }) {
 
 function AdminKnowledge({ ctx }) {
   const [text, setText] = useState(ctx.kb);
+  const [notifStatus, setNotifStatus] = useState(Notification.permission);
+
+  async function enableNotifications() {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      ctx.flash("Push notifications aren't supported on this browser.");
+      return;
+    }
+    if (!ctx.info?.pushPublicKey) {
+      ctx.flash("VAPID keys aren't configured on the server yet.");
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      setNotifStatus(permission);
+      if (permission !== "granted") { ctx.flash("Notification permission was denied."); return; }
+      const reg = await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+      if (existing) await existing.unsubscribe();
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(ctx.info.pushPublicKey),
+      });
+      await ctx.api.pushSubscribe(sub.toJSON());
+      ctx.flash("Notifications enabled. You'll get a ping when a new request comes in.");
+    } catch (e) {
+      ctx.flash(e.message || "Could not enable notifications.");
+    }
+  }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={st.card}>
@@ -2644,6 +2672,21 @@ function AdminKnowledge({ ctx }) {
         <p style={{ fontSize: 13, color: T.muted, margin: "6px 0 10px" }}>The Friday Night Sessions docs (v1.3), Songwriter Round (v1.2), stage spec sheet, gear rules, and the tip/door-cover model are already built in. Add anything beyond those here. This text feeds both the artist "The Deal" page and the chatbot; anything not covered escalates to {INFO_EMAIL}.</p>
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={10} placeholder={DEFAULT_KB} style={{ ...st.input, width: "100%", resize: "vertical", boxSizing: "border-box" }} />
         <button onClick={async () => { try { await ctx.api.saveKb(text); await ctx.refreshDesk(); ctx.flash("Knowledge updated for the page and the chatbot."); } catch (e) { ctx.flash(e.message || "Could not save."); } }} style={{ ...st.amberBtn, marginTop: 8 }}>Save knowledge</button>
+      </div>
+
+      <div style={st.card}>
+        <div style={st.cardTitle}>Booking request notifications</div>
+        <p style={{ fontSize: 13, color: T.muted, margin: "6px 0 10px" }}>
+          Get a push notification on this device when an artist submits a booking request. Requires the app to be added to your home screen on iPhone.
+        </p>
+        {notifStatus === "granted"
+          ? <div style={{ fontSize: 13, color: T.green }}>Notifications are enabled on this device.</div>
+          : notifStatus === "denied"
+          ? <div style={{ fontSize: 13, color: T.red }}>Notifications are blocked. Go to your phone Settings → Safari → Notifications → bunkerstratford.com and allow them, then tap below.</div>
+          : null}
+        <button onClick={enableNotifications} style={{ ...st.ghostBtn, marginTop: 8 }}>
+          {notifStatus === "granted" ? "Re-register this device" : "Enable notifications on this device"}
+        </button>
       </div>
 
       <SecurityCard ctx={ctx} />
@@ -2704,8 +2747,9 @@ const st = {
   tabbar: {
     position: "fixed", bottom: 0, left: 0, right: 0, display: "flex",
     background: T.panel, borderTop: `1px solid ${T.line}`, zIndex: 5,
+    paddingBottom: "env(safe-area-inset-bottom, 0px)",
   },
-  tab: { flex: 1, padding: "12px 4px 14px", background: "transparent", border: "none", fontSize: 12.5, fontFamily: "'Karla', sans-serif", fontWeight: 700, letterSpacing: 0.5, cursor: "pointer" },
+  tab: { flex: 1, padding: "14px 4px 16px", background: "transparent", border: "none", fontSize: 12.5, fontFamily: "'Karla', sans-serif", fontWeight: 700, letterSpacing: 0.5, cursor: "pointer" },
   adminTabs: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 },
   adminTab: { padding: "7px 12px", borderRadius: 20, border: `1px solid ${T.line}`, fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Karla', sans-serif" },
   card: { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: "13px 14px", marginBottom: 2 },
