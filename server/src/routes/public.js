@@ -3,7 +3,7 @@
 // per-night max, 28-day cooldown, originals cap, closed nights, Turnstile.
 import { Router } from "express";
 import { uid, tx } from "../db.js";
-import { todayISO, fridaysAhead, fmtLong } from "../lib/dates.js";
+import { todayISO, fridaysAhead, fmtLong, daysBetween } from "../lib/dates.js";
 import {
   entriesFor, writersNight, takenSlots, nightScore, validateRequestFields,
   checkSubmission, MAX_PHOTOS, EVENT_TYPES, isLocal,
@@ -170,10 +170,25 @@ publicRoutes.post("/me/blackouts", requireArtist, async (req, res) => {
   const a = snap.artists[req.artistId];
   const next = [...(a.blackouts || []), { date, reason }].sort((x, y) => x.date.localeCompare(y.date));
   await upsertArtist(req.artistId, { blackouts: next });
+
+  // For a Stratford blackout: auto-decline any of this artist's pending requests
+  // that fall within 14 days either side of the blacked-out date.
+  const autoDeclined = [];
+  if (reason === "stratford") {
+    const pending = snap.requests.filter(
+      (r) => r.artistId === req.artistId && r.status === "pending" && r.date &&
+              Math.abs(daysBetween(r.date, date)) <= 14
+    );
+    for (const r of pending) {
+      await updateRequest(r.id, { status: "declined", auto: true, autoReason: `Stratford blackout on ${date}` });
+      autoDeclined.push(r.date);
+    }
+  }
+
   res.json({
-    ok: true, blackouts: next,
+    ok: true, blackouts: next, autoDeclined,
     message: reason === "stratford"
-      ? "Got it. We won't reach out for that date, or for 2 weeks either side, since you're playing locally."
+      ? `Got it. We won't reach out for that date, or for 2 weeks either side, since you're playing locally.${autoDeclined.length ? ` ${autoDeclined.length} pending request${autoDeclined.length > 1 ? "s" : ""} in that window were auto-declined.` : ""}`
       : "Got it. We won't reach out for that date.",
   });
 });
@@ -197,6 +212,20 @@ publicRoutes.post("/me/pings/:id/read", requireArtist, async (req, res) => {
 });
 
 /* Push subscription */
+publicRoutes.post("/me/pings/:id/decline", requireArtist, async (req, res) => {
+  const rows = await q("SELECT * FROM pings WHERE id = $1 AND artist_id = $2", [req.params.id, req.artistId]);
+  await q("UPDATE pings SET read = TRUE WHERE id = $1 AND artist_id = $2", [req.params.id, req.artistId]);
+  const snap = await snapshot();
+  const a = snap.artists[req.artistId];
+  const when = rows[0]?.date_iso ? fmtLong(rows[0].date_iso) : "a date we offered";
+  pushToVenue({
+    title: "An artist passed on a date",
+    body: `${a?.name || "An artist"} declined ${when}.`,
+    tag: "ping-declined",
+  }).catch(() => {});
+  res.json({ ok: true });
+});
+
 publicRoutes.post("/me/push/subscribe", requireArtist, async (req, res) => {
   const sub = req.body?.subscription;
   if (!sub?.endpoint) return res.status(400).json({ error: "Bad subscription." });

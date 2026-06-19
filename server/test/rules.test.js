@@ -193,7 +193,7 @@ test("recommender skips single-preference artists and passed picks; pass refills
 
 /* ---------- blackouts (§4): stratford buffers 14 days either side ---------- */
 
-test("stratford blackout removes the artist from recommendations for the buffered window but never blocks direct requests", () => {
+test("stratford blackout removes the artist from recommendations and now also blocks direct requests in the buffered window", () => {
   const target = F2;
   const a1 = artist("a1", { importedLastPlayed: "2025-01-03", blackouts: [{ date: addDays(target, 10), reason: "stratford" }] });
   const a2 = artist("a2", { importedLastPlayed: "2025-01-03", blackouts: [{ date: addDays(target, 10), reason: "other" }] });
@@ -210,9 +210,14 @@ test("stratford blackout removes the artist from recommendations for the buffere
   const n = nights.find((x) => x.dateISO === target);
   assert.ok(!n.picks.some((p) => p.name === "Artist a1"), "blacked-out artist excluded from the buffered night");
 
-  // Direct request on the blacked-out window is still allowed (blackouts gate outreach, not requests).
+  // A direct request within the buffered window is now blocked too.
   const direct = checkSubmission(s, { artistId: "a1", email: "a1@x.com", dateISO: target, setType: "covers" }, TODAY);
-  assert.equal(direct.ok, true);
+  assert.equal(direct.ok, false, "stratford blackout blocks direct requests in the buffer");
+  assert.equal(direct.code, "blackout");
+
+  // The "other" artist, whose blackout is only the exact date, can still request the buffered Friday.
+  const ok = checkSubmission(s, { artistId: "a2", email: "a2@x.com", dateISO: target, setType: "covers" }, TODAY);
+  assert.equal(ok.ok, true, "exact-date 'other' blackout does not block a different Friday");
 });
 
 test("closed nights and exact-date blackouts are excluded", () => {

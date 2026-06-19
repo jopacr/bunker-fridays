@@ -159,6 +159,10 @@ export function checkSubmission(snap, { artistId, email, dateISO, setType }, tod
   if (dateISO < today) return { ok: false, code: "past", message: "That date has already passed." };
   const { closed, entries } = entriesFor(snap, dateISO);
   if (closed) return { ok: false, code: "closed", message: "That night is closed. Pick another Friday." };
+  const artistRec = snap.artists[artistId];
+  if (artistRec && artistUnavailableOn(artistRec, dateISO)) {
+    return { ok: false, code: "blackout", message: "You've blacked out a date within two weeks of this Friday. A local Stratford show spaces you out by two weeks on either side. Clear that blackout in your profile if it has changed, or pick another Friday." };
+  }
   const writers = writersNight(snap, dateISO);
   if (writers && setType !== "writers-round") {
     return { ok: false, code: "writers-night", message: "That Friday is a Writers Round (originals only)." };

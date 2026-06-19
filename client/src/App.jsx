@@ -414,14 +414,17 @@ export default function App() {
     (async () => {
       try {
         const reg = await navigator.serviceWorker.ready;
-        const existing = await reg.pushManager.getSubscription();
-        if (existing) return; // already subscribed
-        const permission = await Notification.requestPermission();
-        if (permission !== "granted") return;
-        const sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(info.pushPublicKey),
-        });
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          const permission = await Notification.requestPermission();
+          if (permission !== "granted") return;
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(info.pushPublicKey),
+          });
+        }
+        // Register this device for venue pushes (safe to repeat). The same
+        // subscription can also be registered for artist pushes separately.
         await api.pushSubscribe(sub.toJSON());
       } catch (e) { console.warn("push setup:", e); }
     })();
@@ -450,6 +453,24 @@ export default function App() {
     else if (view === "artist") refreshArtist();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, adminAuthed, loaded]);
+
+  // Live updates: refresh in the background every 25s so status changes appear
+  // without reopening the app. Also refresh when the tab regains focus.
+  useEffect(() => {
+    if (!loaded) return;
+    const onDesk = view === "admin" && (adminOk || adminAuthed);
+    const onArtist = view === "artist" && !!session;
+    if (!onDesk && !onArtist) return;
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
+      if (onDesk) refreshDesk(); else refreshArtist();
+    };
+    const interval = setInterval(tick, 5000);
+    const onVis = () => { if (document.visibilityState === "visible") tick(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(interval); document.removeEventListener("visibilitychange", onVis); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, adminOk, adminAuthed, session, loaded]);
 
   function entriesFor(dateISO) {
     // Artist view reads the public calendar payload (no access to other
@@ -695,6 +716,11 @@ function PingBanner({ ctx }) {
     try { await ctx.api.markPingRead(pid); } catch (e) {}
     await ctx.refreshArtist();
   }
+  async function decline(p) {
+    try { await ctx.api.declinePing(p.id); } catch (e) {}
+    await ctx.refreshArtist();
+    ctx.flash("Thanks for letting us know. We've told the venue.");
+  }
   return (
     <div style={{ marginBottom: 14 }}>
       {mine.map((p) => (
@@ -702,8 +728,14 @@ function PingBanner({ ctx }) {
           <div style={{ fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: T.amber }}>Message from The Bunker</div>
           <div style={{ fontSize: 13.5, color: T.cream, marginTop: 5, lineHeight: 1.5 }}>{p.msg || p.message}</div>
           <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
-            {p.dateISO && <button onClick={() => { dismiss(p.id); ctx.setRequestDate(p.dateISO); }} style={{ ...st.amberBtn, fontSize: 12, padding: "6px 12px" }}>Request this date</button>}
-            <button onClick={() => dismiss(p.id)} style={{ ...st.ghostBtn, fontSize: 11.5, padding: "4px 10px" }}>Got it</button>
+            {p.dateISO ? (
+              <>
+                <button onClick={() => { dismiss(p.id); ctx.setRequestDate(p.dateISO); }} style={{ ...st.amberBtn, fontSize: 12, padding: "6px 12px" }}>Request this date</button>
+                <button onClick={() => decline(p)} style={{ ...st.ghostBtn, fontSize: 12, padding: "6px 12px", borderColor: T.red, color: T.red }}>Decline</button>
+              </>
+            ) : (
+              <button onClick={() => dismiss(p.id)} style={{ ...st.ghostBtn, fontSize: 11.5, padding: "4px 10px" }}>Got it</button>
+            )}
             <span style={{ fontSize: 10.5, color: T.muted }}>{new Date(p.ts).toLocaleDateString("en-CA")}</span>
           </div>
         </div>
@@ -717,7 +749,7 @@ function PingBanner({ ctx }) {
    ============================================================ */
 function DatesPage({ ctx }) {
   const [futureDate, setFutureDate] = useState("");
-  const fridays = fridaysAhead(90);
+  const fridays = fridaysAhead(120);
 
   function tryFuture() {
     if (!futureDate) return;
@@ -831,11 +863,26 @@ function InfoPage({ kb }) {
       </div>
 
       <div style={st.card}>
-        <div style={st.cardTitle}>Stage, gear rules, and load-in</div>
-        <p style={st.p}>Stage is 15' wide, 4.5' to 7' deep. <b style={{ color: T.cream }}>Drums: house kit only, no personal kits on stage.</b> The house kit lives in a mic'd sound booth with a headphone mix. Hand percussion (hand drums, cajons) is welcome on stage.</p>
-        <p style={st.p}><b style={{ color: T.cream }}>Your amps are welcome</b>, but they go in the amp isolation box on stage when applicable (fits two mic'd 1x12 combos, plus room for one more up to 24" x 12" x 27"). <b style={{ color: T.cream }}>Backing tracks are discouraged</b>: we're a live music venue, though some exceptions are made. Ask us.</p>
-        <p style={st.p}><b style={{ color: T.cream }}>We provide our own sound tech and a full PA</b>, so you're mixed by someone who knows the room. House backline: GH bass head with DI, Blackstar Club 40, Korg SP500 weighted digital piano, 5 guitar stands. PreSonus board run from iPad, Mackie mains, Alto sub, 3 Alto monitors with individual mixes, 3 SE V7 vocal mics with stands, plus DIs. Bring extras if you need more than 3 mics or stands; extra lighting welcome.</p>
-        <p style={st.p}>Load in at The Bunker lot, then move your vehicle: evening parking is in neighbouring lots or on the street, since the Bunker spots belong to other units.</p>
+        <div style={st.cardTitle}>Stage, gear, and load-in</div>
+
+        <p style={{ ...st.p, fontWeight: 700, color: T.cream, marginBottom: 2 }}>The room</p>
+        <p style={st.p}>Stage is 15' wide and 4.5' to 7' deep. We seat 30 to 40 and run as a listening room, so the sound is dialled in carefully every night.</p>
+
+        <p style={{ ...st.p, fontWeight: 700, color: T.cream, marginBottom: 2, marginTop: 10 }}>Sound (we handle this)</p>
+        <p style={st.p}><b style={{ color: T.cream }}>We provide our own sound tech and a full PA</b>, so you're mixed by someone who knows the room. No need to bring your own engineer.</p>
+        <p style={st.p}>PreSonus board run from iPad · Mackie active mains · Alto sub · 3 Alto monitors with individual mixes · 3 SE V7 dynamic vocal mics with stands · DI inputs for acoustics and keys. If you need more than 3 mics or stands, bring your own; extra lighting is welcome.</p>
+
+        <p style={{ ...st.p, fontWeight: 700, color: T.cream, marginBottom: 2, marginTop: 10 }}>Drums</p>
+        <p style={st.p}><b style={{ color: T.cream }}>House kit only — no personal kits on stage.</b> The kit lives in an enclosed, mic'd sound booth with individual drum mics and a headphone mix for the drummer. Hand percussion (cajons, hand drums) is welcome on stage.</p>
+
+        <p style={{ ...st.p, fontWeight: 700, color: T.cream, marginBottom: 2, marginTop: 10 }}>Guitar and bass</p>
+        <p style={st.p}>House backline: GH bass head with DI out, Blackstar Club 40 combo. <b style={{ color: T.cream }}>Personal amps are welcome</b> and go in the isolation box on stage. The box fits two mic'd 1x12 combos maximum; one slot is taken by our house amp, so there is room for one additional amp (max 24" wide × 12" deep × 27" high). Amps too large for the box go DI. 3 general-purpose guitar stands and 2 acoustic stands available.</p>
+
+        <p style={{ ...st.p, fontWeight: 700, color: T.cream, marginBottom: 2, marginTop: 10 }}>Keys and other</p>
+        <p style={st.p}>Korg SP500 weighted digital piano available. DIs for acoustic instruments and keyboards. <b style={{ color: T.cream }}>Backing tracks are discouraged</b> — we're a live music venue — though some exceptions are made. Ask us ahead of time.</p>
+
+        <p style={{ ...st.p, fontWeight: 700, color: T.cream, marginBottom: 2, marginTop: 10 }}>Load-in</p>
+        <p style={st.p}>Soundcheck runs 6PM to 7PM. Load in at The Bunker lot, then move your vehicle: evening parking is in neighbouring lots or on the street, since the Bunker spots belong to other units in the building.</p>
       </div>
 
       {kb && kb.trim() && (
@@ -1545,9 +1592,7 @@ function ProfileEditor({ ctx, artist }) {
               const permission = await Notification.requestPermission();
               if (permission !== "granted") { ctx.flash("Notification permission was denied."); return; }
               const reg = await navigator.serviceWorker.ready;
-              const existing = await reg.pushManager.getSubscription();
-              if (existing) await existing.unsubscribe();
-              const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(ctx.info.pushPublicKey) });
+              const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(ctx.info.pushPublicKey) });
               await ctx.api.artistPushSubscribe(sub.toJSON());
               ctx.flash("Notifications enabled. You'll get a ping when your booking is confirmed.");
             } catch (e) { ctx.flash(e.message || "Could not enable notifications."); }
@@ -1764,7 +1809,17 @@ function AdminInbox({ ctx }) {
   const [decliningId, setDecliningId] = useState(null);
   const [cancellingId, setCancellingId] = useState(null);
   const [changingId, setChangingId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
   const [openDraftFor, setOpenDraftFor] = useState(null); // request id whose draft(s) are expanded
+
+  async function removeReq(id) {
+    try {
+      await ctx.api.deleteRequest(id);
+      await ctx.refreshDesk();
+      setDeletingId(null);
+      ctx.flash("Removed from the inbox. Its email drafts were cleared too.");
+    } catch (e) { ctx.flash(e.message || "Could not remove that entry."); }
+  }
   const [armed, setArmed] = useState(false);
   useEffect(() => {
     setArmed(false);
@@ -1948,6 +2003,13 @@ function AdminInbox({ ctx }) {
           </div>
         );
       })()}
+      {!actions && (
+        <div style={{ marginTop: 4 }}>
+          <button onClick={() => (deletingId === r.id ? removeReq(r.id) : setDeletingId(r.id))} onBlur={() => setDeletingId(null)} style={{ ...st.ghostBtn, fontSize: 11.5, padding: "4px 10px", borderColor: T.red, color: T.red }}>
+            {deletingId === r.id ? "Tap again to remove" : "Remove from inbox"}
+          </button>
+        </div>
+      )}
       </div>
     );
   }
@@ -1969,7 +2031,20 @@ function AdminInbox({ ctx }) {
 
 
 function AdminCalendar({ ctx }) {
-  const fridays = fridaysAhead(120);
+  const baseFridays = fridaysAhead(120);
+  // Make sure any confirmed booking that lands past the 120-day window still
+  // shows on the calendar (artists can request further-out Fridays directly).
+  const fridays = (() => {
+    const seen = new Set(baseFridays.map((d) => iso(d)));
+    const extra = new Set();
+    ctx.requests.forEach((r) => { if (r.status === "approved" && r.date && !seen.has(r.date)) extra.add(r.date); });
+    Object.entries(ctx.overrides || {}).forEach(([dISO, day]) => {
+      (day.slots || []).forEach((s) => { if (s.status === "confirmed" && !seen.has(dISO)) extra.add(dISO); });
+    });
+    const all = [...baseFridays, ...[...extra].map((d) => parseISO(d))];
+    all.sort((a, b) => a - b);
+    return all;
+  })();
   const [adding, setAdding] = useState(null);
   const [f, setF] = useState({ name: "", setType: "covers", status: "confirmed", slotTime: "" });
   const [removeArm, setRemoveArm] = useState(null); // "dateISO|idx"
@@ -2300,6 +2375,22 @@ function AdminRecommend({ ctx }) {
   );
 }
 
+function BioBlock({ text }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 140;
+  const shown = open || !long ? text : text.slice(0, 140).trimEnd() + "…";
+  return (
+    <div style={{ fontSize: 12.5, color: T.cream, marginTop: 6, whiteSpace: "pre-wrap" }}>
+      {shown}
+      {long && (
+        <button onClick={() => setOpen((v) => !v)} style={{ background: "none", border: "none", color: T.amber, fontFamily: "'Karla', sans-serif", fontSize: 12, cursor: "pointer", padding: "0 0 0 6px" }}>
+          {open ? "less" : "more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function AdminArtists({ ctx }) {
   const importRef = useRef(null);
   const [q, setQ] = useState("");
@@ -2492,7 +2583,7 @@ function AdminArtists({ ctx }) {
                     ].filter(Boolean).join(" · ")}
                   </div>
                 )}
-                {a.bio && <div style={{ fontSize: 12.5, color: T.cream, marginTop: 6, whiteSpace: "pre-wrap" }}>{a.bio}</div>}
+                {a.bio && <BioBlock text={a.bio} />}
                 {pics.length > 1 && (
                   <div style={{ marginTop: 6 }}>
                     <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>Tap a photo to make it the headshot.</div>
@@ -2675,9 +2766,7 @@ function AdminKnowledge({ ctx }) {
       setNotifStatus(permission);
       if (permission !== "granted") { ctx.flash("Notification permission was denied."); return; }
       const reg = await navigator.serviceWorker.ready;
-      const existing = await reg.pushManager.getSubscription();
-      if (existing) await existing.unsubscribe();
-      const sub = await reg.pushManager.subscribe({
+      const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(ctx.info.pushPublicKey),
       });
@@ -2784,7 +2873,7 @@ const st = {
   input: {
     background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 8,
     padding: "10px 12px", color: T.cream, fontSize: 16, fontFamily: "'Karla', sans-serif",
-    outline: "none", minWidth: 0,
+    outline: "none", minWidth: 0, boxSizing: "border-box", width: "100%", maxWidth: "100%",
   },
   amberBtn: {
     background: T.amber, color: T.ink, border: "none", borderRadius: 8,

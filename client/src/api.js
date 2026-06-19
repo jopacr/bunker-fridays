@@ -23,7 +23,7 @@ async function req(method, path, body) {
 
 export const api = {
   // ---- public ----
-  calendar: () => req("GET", "/calendar"),
+  calendar: () => req("GET", "/calendar?days=120"),
   info: () => req("GET", "/info"),
   submitRequest: (payload) => req("POST", "/requests", payload),
   myRequests: () => req("GET", "/me/requests"),
@@ -34,6 +34,8 @@ export const api = {
   removeBlackout: (date, reason) => req("DELETE", "/me/blackouts", { date, reason }),
   myPings: () => req("GET", "/me/pings"),
   markPingRead: (id) => req("POST", `/me/pings/${id}/read`),
+  declinePing: (id) => req("POST", `/me/pings/${id}/decline`),
+  deleteRequest: (id) => req("DELETE", `/admin/requests/${id}`),
   pushSubscribe: (subscription) => req("POST", "/admin/push/subscribe", { subscription }),
   artistPushSubscribe: (subscription) => req("POST", "/me/push/subscribe", { subscription }),
   photoPresign: (contentType) => req("POST", "/me/photos/presign", { contentType }),

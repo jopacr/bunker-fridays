@@ -101,10 +101,23 @@ adminRoutes.post("/requests/:id/decide", async (req, res) => {
     const d = declineEmailDraft(reason, target, suggestions);
     const draft = await addDraft({ to: target.email, subject: d.subject, body: d.body, kind: "follow-up", label: `Follow-up · ${target.name} · ${target.date ? fmtLong(target.date) : "inquiry"}`, reqId: id });
     await audit(req.adminEmail, "request.decline", "request", id, { reason });
+    pushToArtist(target.artistId, {
+      title: "Update on your Bunker request",
+      body: `${target.date ? fmtLong(target.date) : "Your request"}: not this time, but check the app for other open Fridays.`,
+      tag: "request-declined",
+    }).catch(() => {});
     return res.json({ ok: true, draft });
   }
 
   res.status(400).json({ error: "status must be approved or declined." });
+});
+
+adminRoutes.delete("/requests/:id", async (req, res) => {
+  const id = req.params.id;
+  await q("DELETE FROM drafts WHERE req_id = $1", [id]);
+  await q("DELETE FROM requests WHERE id = $1", [id]);
+  await audit(req.adminEmail, "request.delete", "request", id, {});
+  res.json({ ok: true });
 });
 
 adminRoutes.post("/requests/:id/time", async (req, res) => {
@@ -140,6 +153,11 @@ adminRoutes.post("/requests/:id/cancel", async (req, res) => {
     const d = removalEmailDraft(target, reason);
     draft = await addDraft({ to: target.email, subject: d.subject, body: d.body, kind: "follow-up", label: `Removal · ${target.name} · ${fmtLong(target.date)}`, reqId: id });
   }
+  pushToArtist(target.artistId, {
+    title: "Your Bunker set was released",
+    body: `${fmtLong(target.date)}${target.slotTime ? ` · ${target.slotTime}` : ""} is no longer booked. Check your email and reach out for another date.`,
+    tag: "booking-cancelled",
+  }).catch(() => {});
   res.json({ ok: true, draft });
 });
 
@@ -407,6 +425,10 @@ adminRoutes.post("/recommend/outreach", async (req, res) => {
       body: `${dateLabel}${slotLabel ? ` · ${slotLabel} set` : ""}. Open the app to request the date.`,
       data: { dateISO: date },
     });
+    const phone = snap.artists[artistId]?.phone || "";
+    if (phone && smsEnabled()) {
+      sendSms(phone, outreachShortText(artistName, dateLabel, slotLabel || null, slotType || "covers", writers)).catch(() => {});
+    }
   }
   await audit(req.adminEmail, "recommend.outreach", "artist", artistId || artistName, { date });
   res.json(out);
