@@ -72,6 +72,25 @@ const toISO = (v) => {
 };
 const yes = (v) => String(v || "").trim().toLowerCase() === "yes";
 
+// A blank cell means "no data here, keep whatever the app already has."
+// A present cell — including a legitimate 0 or "no" — means Excel is
+// authoritative and should overwrite the app's value.
+function numOrPrev(cell, prevVal) {
+  if (cell === undefined || cell === null || String(cell).trim() === "") return prevVal || 0;
+  const n = Number(cell);
+  return Number.isFinite(n) ? n : (prevVal || 0);
+}
+function yesNoFlagOrPrev(cell, prevVal) {
+  const s = String(cell ?? "").trim().toLowerCase();
+  if (s === "yes") return "1";
+  if (s === "no") return "0";
+  return prevVal ?? "0";
+}
+function textOrPrev(cell, prevVal) {
+  const s = cell == null ? "" : String(cell).trim();
+  return s ? s : (prevVal || "");
+}
+
 export function parseWorkbook(buffer) {
   const wb = XLSX.read(buffer, { type: "buffer", cellDates: true });
   const sheet = (n) => (wb.Sheets[n] ? XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1 }) : null);
@@ -112,12 +131,12 @@ export function applyWorkbook(snap, { artists: artistRows, bookings: bookingRows
         bookingPref: status === "single" ? "single" : status === "regular" ? "rotation" : prev.bookingPref || null,
         city: wasFabricated ? "" : (prev.city || ""),
         local: yes(r[2]) || prev.local || false,
-        originalsSets: prev.originalsSets ?? (yes(r[3]) ? "1" : "0"),
-        coversSets: prev.coversSets ?? (yes(r[4]) ? "1" : "0"),
-        talentScore: Number(r[5]) || prev.talentScore || 0,
-        drawScore: Number(r[6]) || prev.drawScore || 0,
+        originalsSets: yesNoFlagOrPrev(r[3], prev.originalsSets),
+        coversSets: yesNoFlagOrPrev(r[4], prev.coversSets),
+        talentScore: numOrPrev(r[5], prev.talentScore),
+        drawScore: numOrPrev(r[6], prev.drawScore),
         importedLastPlayed: toISO(r[8]) || prev.importedLastPlayed || "",
-        adminNotes: prev.adminNotes || (r[9] ? String(r[9]).trim() : ""),
+        adminNotes: textOrPrev(r[9], prev.adminNotes),
         unavailableDates: unav.length ? unav : (prev.unavailableDates || []),
         source: prev.source || "workbook import",
       };

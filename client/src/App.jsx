@@ -351,7 +351,12 @@ export default function App() {
 
   const [page, setPage] = useState("info");
   const [adminPage, setAdminPage] = useState("inbox");
-  const [requestDate, setRequestDate] = useState(null);
+  const [requestDate, setRequestDateRaw] = useState(null); // { dateISO, slotPref, setType } | null
+  const setRequestDate = (v) => {
+    if (v == null) { setRequestDateRaw(null); return; }
+    if (typeof v === "string") { setRequestDateRaw({ dateISO: v, slotPref: null, setType: null }); return; }
+    setRequestDateRaw(v);
+  };
   const [resetToken, setResetToken] = useState(null);
   const [toast, setToast] = useState(null);
 
@@ -627,7 +632,7 @@ export default function App() {
           )}
         </main>
       )}
-      {requestDate && <RequestModal ctx={ctx} dateISO={requestDate} onClose={() => setRequestDate(null)} />}
+      {requestDate && <RequestModal ctx={ctx} dateISO={requestDate.dateISO} initialSlotPref={requestDate.slotPref} initialSetType={requestDate.setType} onClose={() => setRequestDate(null)} />}
       {toast && <div style={st.toast}>{toast}</div>}
     </div>
   );
@@ -731,10 +736,15 @@ function PingBanner({ ctx }) {
         <div key={p.id} style={{ ...st.card, borderLeft: `3px solid ${T.amber}`, marginBottom: 8 }}>
           <div style={{ fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: T.amber }}>Message from The Bunker</div>
           <div style={{ fontSize: 13.5, color: T.cream, marginTop: 5, lineHeight: 1.5 }}>{p.msg || p.message}</div>
+          {p.dateISO && (p.slotTime || p.setType) && (
+            <div style={{ fontSize: 11.5, color: T.muted, marginTop: 4 }}>
+              We'll suggest {p.slotTime || "a"}{p.setType === "single-originals" ? " originals" : p.setType === "covers" ? " covers" : ""} set — you can change the time or style before sending.
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
             {p.dateISO ? (
               <>
-                <button onClick={() => { dismiss(p.id); ctx.setRequestDate(p.dateISO); }} style={{ ...st.amberBtn, fontSize: 12, padding: "6px 12px" }}>Request this date</button>
+                <button onClick={() => { dismiss(p.id); ctx.setRequestDate({ dateISO: p.dateISO, slotPref: p.slotTime || null, setType: p.setType || null }); }} style={{ ...st.amberBtn, fontSize: 12, padding: "6px 12px" }}>Request this date</button>
                 <button onClick={() => decline(p)} style={{ ...st.ghostBtn, fontSize: 12, padding: "6px 12px", borderColor: T.red, color: T.red }}>Decline</button>
               </>
             ) : (
@@ -965,7 +975,7 @@ function PhotoUploader({ photos, onChange, flash, ctx }) {
    ARTIST: REQUEST MODAL
    Fields mirror BunkerStratford.com/performer-inquiry
    ============================================================ */
-function RequestModal({ ctx, dateISO, onClose }) {
+function RequestModal({ ctx, dateISO, initialSlotPref, initialSetType, onClose }) {
   const d = parseISO(dateISO);
   const writers = ctx.writersNight(d);
   const { entries } = ctx.entriesFor(dateISO);
@@ -992,9 +1002,9 @@ function RequestModal({ ctx, dateISO, onClose }) {
     bio: prof?.bio || "",
     etransferEmail: prof?.etransferEmail || "",
     photos: photosOf(prof),
-    setType: writers ? "writers-round" : (originalsFull ? "covers" : ""),
+    setType: writers ? "writers-round" : (originalsFull ? "covers" : (initialSetType || "")),
     bookingPref: prof?.bookingPref || "",
-    slotPref: "any",
+    slotPref: (initialSlotPref && !takenTimes.has(initialSlotPref)) ? initialSlotPref : "any",
     recording: "none",
     songsReady: false,
     notes: "",

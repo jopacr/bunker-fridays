@@ -419,7 +419,8 @@ adminRoutes.post("/recommend/outreach", async (req, res) => {
 
   if (ping && artistId && snap.artists[artistId]) {
     const message = `We'd love to have you play ${dateLabel}${slotLabel ? ` (${slotLabel} set)` : ""}. Tap below to request the date and we'll confirm you right away.`;
-    out.ping = await addPing(artistId, message, date);
+    const pingSetType = writers ? "writers-round" : (slotType === "originals" ? "single-originals" : slotType === "covers" ? "covers" : null);
+    out.ping = await addPing(artistId, message, date, slotLabel || null, pingSetType);
     await pushToArtist(artistId, {
       title: "The Bunker wants you on a bill",
       body: `${dateLabel}${slotLabel ? ` · ${slotLabel} set` : ""}. Open the app to request the date.`,

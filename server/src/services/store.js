@@ -225,15 +225,15 @@ export async function listDrafts() {
 }
 
 /* ---------- pings ---------- */
-export async function addPing(artistId, message, dateISO) {
+export async function addPing(artistId, message, dateISO, slotTime, setType) {
   const id = uid();
-  await q("INSERT INTO pings (id, artist_id, message, date_iso) VALUES ($1,$2,$3,$4)", [id, artistId, message, dateISO || null]);
+  await q("INSERT INTO pings (id, artist_id, message, date_iso, slot_time, set_type) VALUES ($1,$2,$3,$4,$5,$6)", [id, artistId, message, dateISO || null, slotTime || null, setType || null]);
   return id;
 }
 
 export async function pingsFor(artistId) {
   return (await q("SELECT * FROM pings WHERE artist_id = $1 ORDER BY ts DESC", [artistId]))
-    .map((r) => ({ id: r.id, msg: r.message, dateISO: r.date_iso, read: !!r.read, ts: r.ts }));
+    .map((r) => ({ id: r.id, msg: r.message, dateISO: r.date_iso, slotTime: r.slot_time, setType: r.set_type, read: !!r.read, ts: r.ts }));
 }
 
 /* ---------- escalations ---------- */
