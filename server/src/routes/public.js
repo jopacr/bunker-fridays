@@ -162,34 +162,37 @@ publicRoutes.post("/me/profile", requireArtist, async (req, res) => {
 
 /* Blackouts (§4): self-serve, with reason. */
 publicRoutes.post("/me/blackouts", requireArtist, async (req, res) => {
-  const { date, reason } = req.body || {};
+  const { date, dateTo, reason } = req.body || {};
   const today = todayISO();
-  if (!date || date < today) return res.status(400).json({ error: "Pick a future date." });
+  if (!date || date < today) return res.status(400).json({ error: "Pick a future start date." });
   if (!["stratford", "other"].includes(reason)) return res.status(400).json({ error: "Pick a reason." });
+  // dateTo is optional; if provided it must be >= date
+  const rangeEnd = dateTo && dateTo >= date ? dateTo : null;
   const snap = await snapshot();
   const a = snap.artists[req.artistId];
-  const next = [...(a.blackouts || []), { date, reason }].sort((x, y) => x.date.localeCompare(y.date));
+  const entry = rangeEnd ? { date, dateTo: rangeEnd, reason } : { date, reason };
+  const next = [...(a.blackouts || []), entry].sort((x, y) => x.date.localeCompare(y.date));
   await upsertArtist(req.artistId, { blackouts: next });
 
-  // For a Stratford blackout: auto-decline any of this artist's pending requests
-  // that fall within 14 days either side of the blacked-out date.
+  // For a Stratford blackout: auto-decline pending requests in the buffer window.
   const autoDeclined = [];
   if (reason === "stratford") {
     const pending = snap.requests.filter(
       (r) => r.artistId === req.artistId && r.status === "pending" && r.date &&
-              Math.abs(daysBetween(r.date, date)) <= 14
+              (Math.abs(daysBetween(r.date, date)) <= 14 || (rangeEnd && Math.abs(daysBetween(r.date, rangeEnd)) <= 14) || (r.date >= date && r.date <= (rangeEnd || date)))
     );
     for (const r of pending) {
-      await updateRequest(r.id, { status: "declined", auto: true, autoReason: `Stratford blackout on ${date}` });
+      await updateRequest(r.id, { status: "declined", auto: true, autoReason: `Stratford blackout ${date}${rangeEnd ? ` to ${rangeEnd}` : ""}` });
       autoDeclined.push(r.date);
     }
   }
 
+  const rangeLabel = rangeEnd ? ` to ${fmtLong(rangeEnd)}` : "";
   res.json({
     ok: true, blackouts: next, autoDeclined,
     message: reason === "stratford"
-      ? `Got it. We won't reach out for that date, or for 2 weeks either side, since you're playing locally.${autoDeclined.length ? ` ${autoDeclined.length} pending request${autoDeclined.length > 1 ? "s" : ""} in that window were auto-declined.` : ""}`
-      : "Got it. We won't reach out for that date.",
+      ? `Got it. We won't reach out for ${rangeEnd ? "those dates" : "that date"}, or for 2 weeks either side.${autoDeclined.length ? ` ${autoDeclined.length} pending request${autoDeclined.length > 1 ? "s" : ""} in that window were auto-declined.` : ""}`
+      : `Got it. We won't reach out for ${rangeEnd ? `those dates (${date}${rangeLabel})` : "that date"}.`,
   });
 });
 

@@ -92,9 +92,14 @@ export function artistIsLocal(a, localCities) {
 export function artistUnavailableOn(a, dISO) {
   if ((a.unavailableDates || []).includes(dISO)) return true;
   for (const b of (a.blackouts || [])) {
+    const from = b.date;
+    const to = b.dateTo || b.date; // dateTo present on range entries
+    // Check whether dISO falls within [from, to]
+    const inRange = dISO >= from && dISO <= to;
     if (b.reason === "stratford") {
-      if (Math.abs(daysBetween(dISO, b.date)) <= 14) return true;
-    } else if (b.date === dISO) return true;
+      // Buffer 14 days either side of the entire range
+      if (Math.abs(daysBetween(dISO, from)) <= 14 || Math.abs(daysBetween(dISO, to)) <= 14 || inRange) return true;
+    } else if (inRange) return true;
   }
   return false;
 }

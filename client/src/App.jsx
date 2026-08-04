@@ -352,6 +352,7 @@ export default function App() {
   const [page, setPage] = useState("info");
   const [adminPage, setAdminPage] = useState("inbox");
   const [requestDate, setRequestDate] = useState(null);
+  const [resetToken, setResetToken] = useState(null);
   const [toast, setToast] = useState(null);
 
   useEffect(() => {
@@ -374,11 +375,14 @@ export default function App() {
         if (am && am.admin) { setAdminAuthed(true); }
       } catch (e) { /* not an admin session */ }
       // Deep link from a push notification: /?request=YYYY-MM-DD or /?page=mine
+      // Also handles /?reset=TOKEN from the password reset email.
       try {
         const qp = new URLSearchParams(window.location.search);
         if (qp.get("page") === "mine") setPage("mine");
         const rd = qp.get("request");
         if (rd) { setPage("dates"); setRequestDate(rd); }
+        const rt = qp.get("reset");
+        if (rt) { setPage("account"); setResetToken(rt); }
       } catch (e) {}
       setLoaded(true);
     })();
@@ -581,7 +585,7 @@ export default function App() {
     );
   }
 
-  const ctx = { requests, artists, overrides, kb, escalations, session, recConfig, pings, recPasses, drafts, calendar, info, serverToday, api, setSession, setPage, refreshArtist, refreshDesk, entriesFor, perNightCount, cooldownBlock, hasPlayed, takenSlots, suggestFridays, writersNight, artistUnavailableOn, flash, setRequestDate };
+  const ctx = { requests, artists, overrides, kb, escalations, session, recConfig, pings, recPasses, drafts, calendar, info, serverToday, api, setSession, setPage, refreshArtist, refreshDesk, entriesFor, perNightCount, cooldownBlock, hasPlayed, takenSlots, suggestFridays, writersNight, artistUnavailableOn, flash, setRequestDate, resetToken, setResetToken };
 
   return (
     <div style={st.shell}>
@@ -1386,8 +1390,10 @@ function AccountPage({ ctx }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
-  const [mode, setMode] = useState("signin");
+  const [mode, setMode] = useState(ctx.resetToken ? "reset-complete" : "signin");
   const [notice, setNotice] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [newPw2, setNewPw2] = useState("");
 
   async function go() {
     const em = email.trim().toLowerCase();
@@ -1417,9 +1423,57 @@ function AccountPage({ ctx }) {
     setPw(""); setPw2("");
   }
 
+  async function sendReset() {
+    const em = email.trim().toLowerCase();
+    if (!em) { ctx.flash("Enter your email address first."); return; }
+    try {
+      await ctx.api.requestReset(em);
+      setNotice("If that email has an account, a reset link is on the way. Check your inbox and spam folder.");
+      setMode("signin");
+    } catch (e) { ctx.flash(e.message || "Could not send reset email."); }
+  }
+
+  async function completeReset() {
+    if (!newPw || newPw.length < 8) { ctx.flash("Password must be at least 8 characters."); return; }
+    if (newPw !== newPw2) { ctx.flash("Passwords don't match."); return; }
+    try {
+      await ctx.api.completeReset(ctx.resetToken, newPw);
+      ctx.setResetToken(null);
+      window.history.replaceState({}, "", window.location.pathname);
+      ctx.flash("Password updated. Sign in with your new password.");
+      setMode("signin");
+    } catch (e) { ctx.flash(e.message || "That reset link is invalid or expired."); }
+  }
+
   if (ctx.session) {
     const a = ctx.artists[ctx.session.artistId] || {};
     return <ProfileEditor ctx={ctx} artist={a} />;
+  }
+
+  if (mode === "reset-complete") {
+    return (
+      <div style={st.card}>
+        <div style={st.cardTitle}>Set a new password</div>
+        <div style={{ ...st.formGrid, marginTop: 10 }}>
+          <input type="password" placeholder="New password (8+ characters)" value={newPw} onChange={(e) => setNewPw(e.target.value)} style={st.input} />
+          <input type="password" placeholder="Confirm new password" value={newPw2} onChange={(e) => setNewPw2(e.target.value)} style={st.input} />
+          <button onClick={completeReset} style={st.amberBtn}>Set new password</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === "forgot") {
+    return (
+      <div>
+        <p style={st.lede}>Enter the email address on your account and we'll send a reset link.</p>
+        <div style={st.formGrid}>
+          <input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} style={st.input} />
+          <button onClick={sendReset} style={st.amberBtn}>Send reset link</button>
+        </div>
+        <button onClick={() => setMode("signin")} style={{ ...st.ghostBtn, marginTop: 10, fontSize: 12 }}>Back to sign in</button>
+      </div>
+    );
   }
 
   return (
@@ -1437,7 +1491,12 @@ function AccountPage({ ctx }) {
         {mode === "create" && <input type="password" placeholder="Confirm password" value={pw2} onChange={(e) => setPw2(e.target.value)} style={st.input} />}
         <button onClick={go} style={st.amberBtn}>{mode === "create" ? "Create account" : "Sign in"}</button>
       </div>
-      <p style={{ fontSize: 11.5, color: T.muted, marginTop: 10 }}>Passwords are hashed, never stored in plain text. This is a preview build; production adds server-side authentication and two-factor sign-in.</p>
+      {mode === "signin" && (
+        <button onClick={() => setMode("forgot")} style={{ background: "none", border: "none", color: T.muted, fontSize: 12.5, cursor: "pointer", marginTop: 10, padding: 0, fontFamily: "'Karla', sans-serif" }}>
+          Forgot your password?
+        </button>
+      )}
+      <p style={{ fontSize: 11.5, color: T.muted, marginTop: 10 }}>Passwords are hashed, never stored in plain text.</p>
     </div>
   );
 }
@@ -1446,27 +1505,48 @@ function AccountPage({ ctx }) {
    ARTIST: PROFILE EDITOR (the Account tab when signed in)
    ============================================================ */
 function ProfileEditor({ ctx, artist }) {
+  const DRAFT_KEY = `profile_draft_${artist.id || "new"}`;
+
+  function loadDraft() {
+    try { return JSON.parse(sessionStorage.getItem(DRAFT_KEY) || "null"); } catch { return null; }
+  }
+  function saveDraft(values) {
+    try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(values)); } catch {}
+  }
+  function clearDraft() {
+    try { sessionStorage.removeItem(DRAFT_KEY); } catch {}
+  }
+
+  const draft = loadDraft();
   const [f, setF] = useState({
-    name: artist.name || "",
-    stageName: artist.stageName || "",
-    contactMethod: artist.contactMethod || "Email",
-    phone: artist.phone || "",
-    instagram: artist.instagram || "",
-    facebook: artist.facebook || "",
-    genre: artist.genre || "",
-    city: artist.city || "",
-    originalsSets: artist.originalsSets ?? "",
-    coversSets: artist.coversSets ?? "",
-    bookingPref: artist.bookingPref || "",
-    bio: artist.bio || "",
-    etransferEmail: artist.etransferEmail || "",
+    name: draft?.name ?? artist.name ?? "",
+    stageName: draft?.stageName ?? artist.stageName ?? "",
+    contactMethod: draft?.contactMethod ?? artist.contactMethod ?? "Email",
+    phone: draft?.phone ?? artist.phone ?? "",
+    instagram: draft?.instagram ?? artist.instagram ?? "",
+    facebook: draft?.facebook ?? artist.facebook ?? "",
+    genre: draft?.genre ?? artist.genre ?? "",
+    city: draft?.city ?? artist.city ?? "",
+    originalsSets: draft?.originalsSets ?? artist.originalsSets ?? "",
+    coversSets: draft?.coversSets ?? artist.coversSets ?? "",
+    bookingPref: draft?.bookingPref ?? artist.bookingPref ?? "",
+    bio: draft?.bio ?? artist.bio ?? "",
+    etransferEmail: draft?.etransferEmail ?? artist.etransferEmail ?? "",
   });
-  const initialLinks = (artist.links || "").split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  const initialLinks = (draft?.links ?? artist.links ?? "").split(/\n+/).map((s) => s.trim()).filter(Boolean);
   const [links, setLinks] = useState(initialLinks.length ? initialLinks : [""]);
   const [photos, setPhotos] = useState(photosOf(artist));
   const [busy, setBusy] = useState(false);
-  function up(k, v) { setF((p) => ({ ...p, [k]: v })); }
-  const setLink = (i, v) => setLinks((p) => p.map((x, j) => (j === i ? v : x)));
+  function up(k, v) {
+    const next = { ...f, [k]: v };
+    setF(next);
+    saveDraft({ ...next, links: links.join("\n") });
+  }
+  const setLink = (i, v) => setLinks((p) => {
+    const next = p.map((x, j) => (j === i ? v : x));
+    saveDraft({ ...f, links: next.join("\n") });
+    return next;
+  });
   const addLink = () => setLinks((p) => [...p, ""]);
   const removeLink = (i) => setLinks((p) => (p.length <= 1 ? [""] : p.filter((_, j) => j !== i)));
 
@@ -1491,6 +1571,7 @@ function ProfileEditor({ ctx, artist }) {
         etransferEmail: f.etransferEmail.trim(),
       });
       await ctx.refreshArtist();
+      clearDraft();
       ctx.flash("Profile saved. The venue sees these details.");
     } catch (e) {
       ctx.flash(e.message || "Could not save your profile.");
@@ -1612,11 +1693,13 @@ function ProfileEditor({ ctx, artist }) {
    ============================================================ */
 function BlackoutCard({ ctx, artist }) {
   const [date, setDate] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [isRange, setIsRange] = useState(false);
   const [reason, setReason] = useState("other");
   const today = iso(new Date());
   const blackouts = (artist.blackouts || []).filter((b) => {
-    // keep Stratford blackouts until their 2-week tail has passed
-    const keepUntil = parseISO(b.date);
+    const tail = b.dateTo || b.date;
+    const keepUntil = parseISO(tail);
     keepUntil.setDate(keepUntil.getDate() + (b.reason === "stratford" ? 14 : 0));
     return iso(keepUntil) >= today;
   });
@@ -1624,13 +1707,13 @@ function BlackoutCard({ ctx, artist }) {
   async function add() {
     if (!date) return;
     if (date < today) { ctx.flash("Pick a future date."); return; }
+    if (isRange && dateTo && dateTo < date) { ctx.flash("End date must be after the start date."); return; }
+    const rangeEnd = isRange && dateTo && dateTo >= date ? dateTo : null;
     try {
-      await ctx.api.addBlackout(date, reason);
+      const r = await ctx.api.addBlackout(date, reason, rangeEnd);
       await ctx.refreshArtist();
-      setDate("");
-      ctx.flash(reason === "stratford"
-        ? "Got it. We won't reach out for that date, or for 2 weeks either side, since you're playing locally."
-        : "Got it. We won't reach out for that date.");
+      setDate(""); setDateTo("");
+      ctx.flash(r.message || "Got it.");
     } catch (e) { ctx.flash(e.message || "Could not save that date."); }
   }
 
@@ -1649,20 +1732,39 @@ function BlackoutCard({ ctx, artist }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
           {blackouts.map((b, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 13, color: T.cream }}>{fmtLong(parseISO(b.date))}</span>
-              <span style={{ ...st.badge, borderColor: b.reason === "stratford" ? T.amber : T.muted, color: b.reason === "stratford" ? T.amber : T.muted }}>{b.reason === "stratford" ? "PLAYING IN STRATFORD · 2WK BUFFER" : "UNAVAILABLE"}</span>
+              <span style={{ fontSize: 13, color: T.cream }}>
+                {fmtLong(parseISO(b.date))}{b.dateTo && b.dateTo !== b.date ? ` to ${fmtLong(parseISO(b.dateTo))}` : ""}
+              </span>
+              <span style={{ ...st.badge, borderColor: b.reason === "stratford" ? T.amber : T.muted, color: b.reason === "stratford" ? T.amber : T.muted }}>
+                {b.reason === "stratford" ? "PLAYING IN STRATFORD · 2WK BUFFER" : "UNAVAILABLE"}
+              </span>
               <button onClick={() => remove(i)} style={{ ...st.ghostBtn, fontSize: 11, padding: "2px 8px", marginLeft: "auto" }}>Remove</button>
             </div>
           ))}
         </div>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={st.input} />
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, color: T.muted, cursor: "pointer" }}>
+          <input type="checkbox" checked={isRange} onChange={(e) => { setIsRange(e.target.checked); if (!e.target.checked) setDateTo(""); }} />
+          Block a date range
+        </label>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 140 }}>
+            <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>{isRange ? "From" : "Date"}</div>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={st.input} />
+          </div>
+          {isRange && (
+            <div style={{ flex: 1, minWidth: 140 }}>
+              <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>To</div>
+              <input type="date" value={dateTo} min={date || today} onChange={(e) => setDateTo(e.target.value)} style={st.input} />
+            </div>
+          )}
+        </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Choice active={reason === "other"} onClick={() => setReason("other")} title="Just unavailable" sub="Only this date is blocked" />
           <Choice active={reason === "stratford"} onClick={() => setReason("stratford")} title="Playing elsewhere in Stratford" sub="Blocks 2 weeks either side here" />
         </div>
-        <button onClick={add} style={st.amberBtn}>Add blackout date</button>
+        <button onClick={add} style={st.amberBtn}>Add blackout{isRange ? " range" : " date"}</button>
       </div>
     </div>
   );
