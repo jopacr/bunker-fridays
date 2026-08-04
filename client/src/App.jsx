@@ -2510,6 +2510,8 @@ function BioBlock({ text }) {
 
 function AdminArtists({ ctx }) {
   const importRef = useRef(null);
+  const [pendingImport, setPendingImport] = useState(null); // { file, conflicts, stats }
+  const [importBusy, setImportBusy] = useState(false);
   const [q, setQ] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [f, setF] = useState({ name: "", email: "", phone: "", city: "", genre: "", links: "" });
@@ -2519,6 +2521,31 @@ function AdminArtists({ ctx }) {
   const [delArm, setDelArm] = useState(null);
   const [mergeId, setMergeId] = useState(null); // artist being merged away
   const [mergeArm, setMergeArm] = useState(null); // keeper id armed for confirm
+
+  async function submitImport(file, confirm) {
+    setImportBusy(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      if (confirm) form.append("confirm", "true");
+      const res = await fetch("/api/admin/workbook/import", { method: "POST", credentials: "same-origin", body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Import failed.");
+      if (data.needsConfirm) {
+        setPendingImport({ file, conflicts: data.conflicts || [], stats: data.stats });
+        setImportBusy(false);
+        return;
+      }
+      setPendingImport(null);
+      await ctx.refreshDesk();
+      const skipped = data.skippedRows || [];
+      ctx.flash(`Imported ${data.importedArtists} artists, ${data.importedBookings} future bookings${data.closedNights ? `, ${data.closedNights} closed nights` : ""}.${skipped.length ? ` ${skipped.length} booking row${skipped.length > 1 ? "s" : ""} had a date we couldn't read and were skipped: row ${skipped.map((s) => s.row).join(", row ")}. Fix those dates and re-import.` : ""}`);
+    } catch (err) {
+      console.error(err);
+      ctx.flash(err.message || "Couldn't read that workbook. Check it has Artists and Bookings sheets.");
+    }
+    setImportBusy(false);
+  }
 
   async function doMerge(keepId) {
     const goneName = ctx.artists[mergeId]?.name || "that record";
@@ -2643,32 +2670,39 @@ function AdminArtists({ ctx }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <div>
             <div style={st.cardTitle}>Recommender workbook</div>
-            <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>Import pulls your booking workbook into the app: artists, statuses, scores, last-played and unavailable dates, plus future bookings onto the calendar. Export goes the other way, in your VBA macro's exact layout, so Excel stays a working mirror as long as you want one.</div>
+            <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>Import pulls your booking workbook into the app: artists, statuses, scores, last-played and unavailable dates, plus future bookings onto the calendar. Excel is treated as the source of truth for any date it lists; if that would remove a booking not on the sheet, you'll be asked to confirm first. Export goes the other way, in your VBA macro's exact layout, so Excel stays a working mirror as long as you want one.</div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={() => importRef.current?.click()} style={st.amberBtn}>Import workbook</button>
+            <button onClick={() => importRef.current?.click()} disabled={importBusy} style={{ ...st.amberBtn, opacity: importBusy ? 0.6 : 1 }}>{importBusy ? "Reading..." : "Import workbook"}</button>
             <a href={ctx.api.workbookExportUrl()} style={{ ...st.ghostBtn, textDecoration: "none", display: "inline-block" }}>Export .xlsx</a>
           </div>
           <input ref={importRef} type="file" accept=".xlsm,.xlsx,.xls" style={{ display: "none" }} onChange={async (e) => {
             const file = e.target.files?.[0];
             if (!file) return;
-            try {
-              const form = new FormData();
-              form.append("file", file);
-              const res = await fetch("/api/admin/workbook/import", { method: "POST", credentials: "same-origin", body: form });
-              const data = await res.json().catch(() => ({}));
-              if (!res.ok) throw new Error(data.error || "Import failed.");
-              await ctx.refreshDesk();
-              const skipped = data.skippedRows || [];
-              ctx.flash(`Imported ${data.importedArtists} artists, ${data.importedBookings} future bookings${data.closedNights ? `, ${data.closedNights} closed nights` : ""}.${skipped.length ? ` ${skipped.length} booking row${skipped.length > 1 ? "s" : ""} had a date we couldn't read and were skipped: row ${skipped.map((s) => s.row).join(", row ")}. Fix those dates and re-import.` : ""}`);
-            } catch (err) {
-              console.error(err);
-              ctx.flash(err.message || "Couldn't read that workbook. Check it has Artists and Bookings sheets.");
-            }
             e.target.value = "";
+            await submitImport(file, false);
           }} />
         </div>
       </div>
+
+      {pendingImport && (
+        <div style={{ ...st.card, borderLeft: `3px solid ${T.red}` }}>
+          <div style={{ ...st.cardTitle, color: T.red }}>This import will overwrite bookings not in the sheet</div>
+          <p style={{ fontSize: 12.5, color: T.muted, margin: "6px 0 10px" }}>Excel doesn't mention these names for these dates, so importing will remove them. Review before continuing.</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+            {pendingImport.conflicts.map((c, i) => (
+              <div key={i} style={{ fontSize: 13, color: T.cream }}>
+                <b>{fmtLong(parseISO(c.date))}</b>: removes {c.removed.join(", ")}
+                {c.replacedWith && c.replacedWith.length ? <span style={{ color: T.muted }}> · sheet now has {c.replacedWith.join(", ")}</span> : <span style={{ color: T.muted }}> · night becomes empty</span>}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => submitImport(pendingImport.file, true)} disabled={importBusy} style={{ ...st.amberBtn, background: T.red, opacity: importBusy ? 0.6 : 1 }}>{importBusy ? "Importing..." : "Import anyway"}</button>
+            <button onClick={() => setPendingImport(null)} style={st.ghostBtn}>Cancel import</button>
+          </div>
+        </div>
+      )}
       {list.map((a) => {
         const pics = photosOf(a);
         const editing = noteEdit[a.id] !== undefined;

@@ -27,6 +27,14 @@ workbookRoutes.post("/import", upload.single("file"), async (req, res) => {
   }
   const snap = await snapshot();
   const result = applyWorkbook(snap, parsed, todayISO());
+  const confirmed = req.body?.confirm === "true" || req.body?.confirm === "1";
+
+  // Excel is authoritative on import, but if it would silently erase bookings
+  // that aren't in the sheet (an app confirmation, a manual entry, or a name
+  // that just isn't on this date anymore), pause and ask first.
+  if (result.stats.conflicts.length && !confirmed) {
+    return res.json({ ok: false, needsConfirm: true, conflicts: result.stats.conflicts, stats: result.stats });
+  }
 
   await tx(async (run) => {
     for (const a of Object.values(result.artists)) {

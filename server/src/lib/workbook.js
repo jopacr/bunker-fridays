@@ -127,23 +127,41 @@ export function applyWorkbook(snap, { artists: artistRows, bookings: bookingRows
 
   const nights = {};
   Object.entries(snap.nights).forEach(([d, n]) => { nights[d] = { ...n, slots: [...(n.slots || [])] }; });
+  // Snapshot of what each date looked like BEFORE this import touches it, so we
+  // can tell the venue what's about to be overwritten.
+  const beforeSlots = {};
+  Object.entries(snap.nights).forEach(([d, n]) => { beforeSlots[d] = (n.slots || []).map((s) => s.name); });
+
   const wbTouched = new Set();
+  const closedTouched = new Set();
   let importedBookings = 0, closedNights = 0;
   const skippedRows = []; // { row, raw, name } — dates we couldn't confidently parse
   const playedByDate = {}; // dateISO -> [names], for companions
+  let lastDateISO = null; // carry-forward for blank date cells (same night as the row above)
 
   if (bookingRows) {
     for (let i = 1; i < bookingRows.length; i++) {
       const r = bookingRows[i] || [];
       const rawDate = r[0];
       const nameGuess = String(r[2] || "").trim();
-      if (rawDate == null || rawDate === "") continue; // fully blank row, not an error
-      const dISO = toISO(rawDate);
+      const slotGuess = String(r[1] || "").trim();
+      const rowBlank = (rawDate == null || rawDate === "") && !nameGuess && !slotGuess;
+      if (rowBlank) continue; // fully empty row, not an error
+
+      let dISO;
+      if (rawDate == null || rawDate === "") {
+        // Blank date cell: common when a booking sheet lists two artists for
+        // the same night stacked in adjacent rows and only writes the date once.
+        dISO = lastDateISO;
+      } else {
+        dISO = toISO(rawDate);
+        if (dISO) lastDateISO = dISO;
+      }
       if (!dISO) {
-        skippedRows.push({ row: i + 1, raw: String(rawDate), name: nameGuess || "(no name)" });
+        skippedRows.push({ row: i + 1, raw: String(rawDate ?? ""), name: nameGuess || "(no name)" });
         continue;
       }
-      const slot = String(r[1] || "").trim().toLowerCase();
+      const slot = slotGuess.toLowerCase();
       const name = nameGuess;
       if (!name) continue;
       if (dISO < today) {
@@ -154,16 +172,21 @@ export function applyWorkbook(snap, { artists: artistRows, bookings: bookingRows
         }
       } else {
         if (name.toLowerCase() === "closed") {
-          nights[dISO] = { ...(nights[dISO] || { slots: [] }), closed: true };
+          if (!wbTouched.has(dISO)) { nights[dISO] = { ...(nights[dISO] || { slots: [] }), slots: [] }; wbTouched.add(dISO); }
+          nights[dISO] = { ...nights[dISO], closed: true };
+          closedTouched.add(dISO);
           closedNights++;
           continue;
         }
         if (name.toLowerCase() === "none" || name.toLowerCase() === "tbd") continue; // junk names skipped
         const day = nights[dISO] || { slots: [] };
-        // First workbook row touching this date clears prior workbook-sourced slots:
-        // re-imports stay clean AND double sets (two rows, same artist) become two slots.
+        // The workbook is authoritative: the first row touching a date this
+        // import clears EVERY existing slot for that date, regardless of where
+        // it came from (a prior import, a manual entry, or an app booking).
+        // Anything cleared that Excel doesn't re-add is reported as a conflict
+        // so the venue can confirm before it's actually overwritten.
         if (!wbTouched.has(dISO)) {
-          day.slots = (day.slots || []).filter((s) => s.source !== "workbook import");
+          day.slots = [];
           wbTouched.add(dISO);
         }
         // House slot-time convention while the workbook is in use:
@@ -183,6 +206,18 @@ export function applyWorkbook(snap, { artists: artistRows, bookings: bookingRows
     }
   }
 
+  // Conflicts: any date this import touched (booked or closed) where names
+  // that existed before are no longer present after. Only real losses count —
+  // a name Excel re-adds for the same date isn't a conflict.
+  const conflicts = [];
+  [...wbTouched].forEach((dISO) => {
+    const before = beforeSlots[dISO] || [];
+    if (!before.length) return;
+    const afterNames = closedTouched.has(dISO) ? [] : (nights[dISO]?.slots || []).map((s) => s.name);
+    const removed = before.filter((n) => !afterNames.some((a) => a.toLowerCase() === n.toLowerCase()));
+    if (removed.length) conflicts.push({ date: dISO, removed, replacedWith: afterNames });
+  });
+
   // Last companions: from each artist's most recent past bill
   Object.values(arts).forEach((a) => {
     const lp = a.importedLastPlayed;
@@ -191,7 +226,7 @@ export function applyWorkbook(snap, { artists: artistRows, bookings: bookingRows
     }
   });
 
-  return { artists: arts, nights, stats: { importedArtists, importedBookings, closedNights, skippedRows } };
+  return { artists: arts, nights, stats: { importedArtists, importedBookings, closedNights, skippedRows, conflicts } };
 }
 
 /** Export mirrors the database back into the macro's exact layout. */
