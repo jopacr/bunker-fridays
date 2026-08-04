@@ -13,10 +13,61 @@ function newId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
 }
 
+// Excel's date epoch (serial 1 = 1900-01-01, with the well-known 1900 leap-year
+// bug baked in, matching how Excel/xlsx actually count days). Used when a date
+// cell comes through as a bare number instead of a real Date (common when a
+// column's cell format is "General"/"Number" rather than a date format).
+function excelSerialToISO(n) {
+  if (!Number.isFinite(n) || n <= 0 || n > 80000) return null; // sane range guard
+  const utcDays = Math.floor(n - (n > 60 ? 1 : 0)); // account for the fictitious Feb 29 1900
+  const ms = Math.round((utcDays - 25569) * 86400 * 1000); // 25569 = days between 1899-12-30 and 1970-01-01
+  const d = new Date(ms);
+  if (isNaN(d)) return null;
+  return iso(d);
+}
+
+// Reject a parsed date whose year falls way outside any plausible booking
+// range. This is the safety net against Date.parse quietly reading a bare
+// number string ("45859") as an absurd extended year instead of failing.
+function plausibleISO(dISO) {
+  if (!dISO) return null;
+  const year = Number(dISO.slice(0, 4));
+  return year >= 2020 && year <= 2100 ? dISO : null;
+}
+
 const toISO = (v) => {
-  if (v instanceof Date && !isNaN(v)) return iso(v);
-  if (typeof v === "string" && /\d{4}-\d{2}-\d{2}/.test(v.trim())) return v.trim().slice(0, 10);
-  if (typeof v === "string" && v.trim() && !isNaN(Date.parse(v))) return new Date(Date.parse(v)).toISOString().slice(0, 10);
+  if (v instanceof Date && !isNaN(v)) return plausibleISO(iso(v));
+  if (typeof v === "number") return excelSerialToISO(v);
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return null;
+    // Already ISO (yyyy-mm-dd, possibly with a time suffix)
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return plausibleISO(s.slice(0, 10));
+    // Slash or dash separated numeric date: M/D/Y, D/M/Y, or Y/M/D. Disambiguate
+    // day vs month using whichever component can't possibly be a month.
+    const parts = s.match(/^(\d{1,4})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (parts) {
+      let [, p1, p2, p3] = parts;
+      if (p1.length === 4) {
+        // Y/M/D
+        return plausibleISO(`${p1}-${String(p2).padStart(2, "0")}-${String(p3).padStart(2, "0")}`);
+      }
+      let month = Number(p1), day = Number(p2);
+      const year = p3.length === 2 ? `20${p3}` : p3;
+      if (month > 12 && day <= 12) { const t = month; month = day; day = t; } // swap: first part was actually the day
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return plausibleISO(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+      }
+      return null;
+    }
+    // A bare number typed as text (e.g. a stray Excel serial pasted as a
+    // string) — never hand this to Date.parse, which will misread it as a
+    // year and silently produce a nonsense date decades away.
+    if (/^\d{3,6}(\.\d+)?$/.test(s)) return excelSerialToISO(Number(s));
+    // Last resort: month-name formats ("July 25, 2026"). Validate the result
+    // rather than trusting Date.parse blindly.
+    if (!isNaN(Date.parse(s))) return plausibleISO(new Date(Date.parse(s)).toISOString().slice(0, 10));
+  }
   return null;
 };
 const yes = (v) => String(v || "").trim().toLowerCase() === "yes";
@@ -78,15 +129,22 @@ export function applyWorkbook(snap, { artists: artistRows, bookings: bookingRows
   Object.entries(snap.nights).forEach(([d, n]) => { nights[d] = { ...n, slots: [...(n.slots || [])] }; });
   const wbTouched = new Set();
   let importedBookings = 0, closedNights = 0;
+  const skippedRows = []; // { row, raw, name } — dates we couldn't confidently parse
   const playedByDate = {}; // dateISO -> [names], for companions
 
   if (bookingRows) {
     for (let i = 1; i < bookingRows.length; i++) {
       const r = bookingRows[i] || [];
-      const dISO = toISO(r[0]);
-      if (!dISO) continue;
+      const rawDate = r[0];
+      const nameGuess = String(r[2] || "").trim();
+      if (rawDate == null || rawDate === "") continue; // fully blank row, not an error
+      const dISO = toISO(rawDate);
+      if (!dISO) {
+        skippedRows.push({ row: i + 1, raw: String(rawDate), name: nameGuess || "(no name)" });
+        continue;
+      }
       const slot = String(r[1] || "").trim().toLowerCase();
-      const name = String(r[2] || "").trim();
+      const name = nameGuess;
       if (!name) continue;
       if (dISO < today) {
         (playedByDate[dISO] = playedByDate[dISO] || []).push(name);
@@ -133,7 +191,7 @@ export function applyWorkbook(snap, { artists: artistRows, bookings: bookingRows
     }
   });
 
-  return { artists: arts, nights, stats: { importedArtists, importedBookings, closedNights } };
+  return { artists: arts, nights, stats: { importedArtists, importedBookings, closedNights, skippedRows } };
 }
 
 /** Export mirrors the database back into the macro's exact layout. */

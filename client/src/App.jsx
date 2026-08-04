@@ -1748,16 +1748,10 @@ function BlackoutCard({ ctx, artist }) {
           <input type="checkbox" checked={isRange} onChange={(e) => { setIsRange(e.target.checked); if (!e.target.checked) setDateTo(""); }} />
           Block a date range
         </label>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <div style={{ flex: 1, minWidth: 140 }}>
-            <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>{isRange ? "From" : "Date"}</div>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={st.input} />
-          </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input type="date" placeholder={isRange ? "From" : "Date"} value={date} onChange={(e) => setDate(e.target.value)} style={{ ...st.input, flex: 1, minWidth: 0 }} />
           {isRange && (
-            <div style={{ flex: 1, minWidth: 140 }}>
-              <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>To</div>
-              <input type="date" value={dateTo} min={date || today} onChange={(e) => setDateTo(e.target.value)} style={st.input} />
-            </div>
+            <input type="date" placeholder="To" value={dateTo} min={date || today} onChange={(e) => setDateTo(e.target.value)} style={{ ...st.input, flex: 1, minWidth: 0 }} />
           )}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -2133,19 +2127,33 @@ function AdminInbox({ ctx }) {
 
 
 function AdminCalendar({ ctx }) {
+  const [showPast, setShowPast] = useState(false);
+  const todayISOStr = ctx.serverToday || iso(new Date());
   const baseFridays = fridaysAhead(120);
   // Make sure any confirmed booking that lands past the 120-day window still
   // shows on the calendar (artists can request further-out Fridays directly).
+  // Past dates are excluded here by default; history stays available via the toggle.
   const fridays = (() => {
     const seen = new Set(baseFridays.map((d) => iso(d)));
     const extra = new Set();
-    ctx.requests.forEach((r) => { if (r.status === "approved" && r.date && !seen.has(r.date)) extra.add(r.date); });
+    ctx.requests.forEach((r) => { if (r.status === "approved" && r.date && r.date >= todayISOStr && !seen.has(r.date)) extra.add(r.date); });
     Object.entries(ctx.overrides || {}).forEach(([dISO, day]) => {
+      if (dISO < todayISOStr) return;
       (day.slots || []).forEach((s) => { if (s.status === "confirmed" && !seen.has(dISO)) extra.add(dISO); });
     });
-    const all = [...baseFridays, ...[...extra].map((d) => parseISO(d))];
-    all.sort((a, b) => a - b);
-    return all;
+    const upcoming = [...baseFridays, ...[...extra].map((d) => parseISO(d))];
+    upcoming.sort((a, b) => a - b);
+    if (!showPast) return upcoming;
+
+    // History: any past Friday with a confirmed booking (app or manual), most recent first.
+    const pastSet = new Set();
+    ctx.requests.forEach((r) => { if (r.status === "approved" && r.date && r.date < todayISOStr) pastSet.add(r.date); });
+    Object.entries(ctx.overrides || {}).forEach(([dISO, day]) => {
+      if (dISO >= todayISOStr) return;
+      (day.slots || []).forEach((s) => { if (s.status === "confirmed") pastSet.add(dISO); });
+    });
+    const past = [...pastSet].map((d) => parseISO(d)).sort((a, b) => b - a);
+    return [...past, ...upcoming];
   })();
   const [adding, setAdding] = useState(null);
   const [f, setF] = useState({ name: "", setType: "covers", status: "confirmed", slotTime: "" });
@@ -2209,17 +2217,24 @@ function AdminCalendar({ ctx }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <p style={{ fontSize: 13, color: T.muted }}>When a Friday request comes in through the website (Outlook inbox), log it here so the app calendar stays true. Manual entries show to artists immediately.</p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <p style={{ fontSize: 13, color: T.muted, margin: 0 }}>When a Friday request comes in through the website (Outlook inbox), log it here so the app calendar stays true. Manual entries show to artists immediately.</p>
+        <button onClick={() => setShowPast((v) => !v)} style={{ ...st.ghostBtn, fontSize: 12, whiteSpace: "nowrap" }}>
+          {showPast ? "Hide past dates" : "Show past dates"}
+        </button>
+      </div>
       {fridays.map((d) => {
         const dISO = iso(d);
+        const isPast = dISO < todayISOStr;
         const { entries, closed } = ctx.entriesFor(dISO);
         const ovSlots = ctx.overrides[dISO]?.slots || [];
         const writers = ctx.writersNight(d);
         return (
-          <div key={dISO} style={{ ...st.card, borderLeft: writers ? `3px solid ${T.amber}` : "3px solid transparent" }}>
+          <div key={dISO} style={{ ...st.card, opacity: isPast ? 0.65 : 1, borderLeft: writers ? `3px solid ${T.amber}` : "3px solid transparent" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <div>
                 <span style={{ color: T.cream, fontWeight: 700 }}>{fmtLong(d)}</span>
+                {isPast && <span style={{ ...st.badge, marginLeft: 8, borderColor: T.muted, color: T.muted }}>PAST</span>}
                 {writers && <span style={{ ...st.badge, marginLeft: 8 }}>WRITERS ROUND</span>}
                 {closed && <span style={{ ...st.badge, marginLeft: 8, borderColor: T.red, color: T.red }}>CLOSED</span>}
               </div>
@@ -2644,7 +2659,8 @@ function AdminArtists({ ctx }) {
               const data = await res.json().catch(() => ({}));
               if (!res.ok) throw new Error(data.error || "Import failed.");
               await ctx.refreshDesk();
-              ctx.flash(`Imported ${data.importedArtists} artists, ${data.importedBookings} future bookings${data.closedNights ? `, ${data.closedNights} closed nights` : ""}.`);
+              const skipped = data.skippedRows || [];
+              ctx.flash(`Imported ${data.importedArtists} artists, ${data.importedBookings} future bookings${data.closedNights ? `, ${data.closedNights} closed nights` : ""}.${skipped.length ? ` ${skipped.length} booking row${skipped.length > 1 ? "s" : ""} had a date we couldn't read and were skipped: row ${skipped.map((s) => s.row).join(", row ")}. Fix those dates and re-import.` : ""}`);
             } catch (err) {
               console.error(err);
               ctx.flash(err.message || "Couldn't read that workbook. Check it has Artists and Bookings sheets.");
