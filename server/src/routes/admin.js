@@ -499,21 +499,33 @@ adminRoutes.post("/recommend/outreach", async (req, res) => {
 // doesn't block other recommendations for the same date, and multiple artists
 // can be tentative at once while the venue juggles responses.
 adminRoutes.post("/recommend/tentative", async (req, res) => {
-  const { artistId, date, slotLabel } = req.body || {};
+  const { artistId, date, slotLabel, weeks } = req.body || {};
   if (!artistId || !date) return res.status(400).json({ error: "artistId and date required." });
   const a = await getArtist(artistId);
   if (!a) return res.status(404).json({ error: "Artist not found." });
   await setTentative(artistId, date, slotLabel || null);
   await audit(req.adminEmail, "recommend.tentative.set", "artist", artistId, { date, slotLabel });
-  res.json({ ok: true, tentatives: await tentativesForDate(date) });
+  const today = todayISO();
+  const [snap, cfg] = await Promise.all([snapshot(), getRecConfig()]);
+  res.json({
+    ok: true,
+    tentatives: await tentativesForDate(date),
+    nights: runRecommendations(snap, cfg, Math.min(Math.max(parseInt(weeks, 10) || 6, 1), 16), today),
+  });
 });
 
 adminRoutes.delete("/recommend/tentative", async (req, res) => {
-  const { artistId, date } = req.body || {};
+  const { artistId, date, weeks } = req.body || {};
   if (!artistId || !date) return res.status(400).json({ error: "artistId and date required." });
   await clearTentative(artistId, date);
   await audit(req.adminEmail, "recommend.tentative.clear", "artist", artistId, { date });
-  res.json({ ok: true, tentatives: await tentativesForDate(date) });
+  const today = todayISO();
+  const [snap, cfg] = await Promise.all([snapshot(), getRecConfig()]);
+  res.json({
+    ok: true,
+    tentatives: await tentativesForDate(date),
+    nights: runRecommendations(snap, cfg, Math.min(Math.max(parseInt(weeks, 10) || 6, 1), 16), today),
+  });
 });
 
 adminRoutes.get("/recconfig", async (_req, res) => res.json(await getRecConfig()));

@@ -58,11 +58,12 @@ export function draftFromRow(r) {
 
 /* ---------- snapshot ---------- */
 export async function snapshot() {
-  const [artistRows, requestRows, nightRows, passRows, kbRow] = await Promise.all([
+  const [artistRows, requestRows, nightRows, passRows, tentativeRows, kbRow] = await Promise.all([
     q("SELECT * FROM artists"),
     q("SELECT * FROM requests ORDER BY ts DESC"),
     q("SELECT * FROM nights"),
     q("SELECT * FROM rec_passes"),
+    q("SELECT * FROM tentative_holds"),
     q("SELECT * FROM venue_kb WHERE id = 1"),
   ]);
   const artists = {};
@@ -71,11 +72,14 @@ export async function snapshot() {
   nightRows.forEach((r) => { nights[r.date] = nightFromRow(r); });
   const recPasses = {};
   passRows.forEach((r) => { recPasses[`${r.artist_id}|${r.date}`] = r.ts; });
+  const tentatives = {};
+  tentativeRows.forEach((r) => { tentatives[`${r.artist_id}|${r.date_iso}`] = r.slot_label || true; });
   return {
     artists,
     requests: requestRows.map(requestFromRow),
     nights,
     recPasses,
+    tentatives,
     localCities: kbRow[0]?.local_cities || null,
   };
 }

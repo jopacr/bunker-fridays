@@ -15,8 +15,8 @@ const TODAY = "2026-06-12"; // a Friday
 const fridays = fridaysAhead(120, new Date("2026-06-12T12:00:00-04:00"));
 const [F1, F2, F3, F4, F5, F6] = fridays;
 
-function snap({ artists = {}, requests = [], nights = {}, recPasses = {} } = {}) {
-  return { artists, requests, nights, recPasses, localCities: null };
+function snap({ artists = {}, requests = [], nights = {}, recPasses = {}, tentatives = {} } = {}) {
+  return { artists, requests, nights, recPasses, tentatives, localCities: null };
 }
 
 const artist = (id, over = {}) => ({
@@ -189,6 +189,29 @@ test("recommender skips single-preference artists and passed picks; pass refills
   names = nights[0].picks.map((p) => p.name).filter(Boolean);
   assert.ok(!names.includes("Artist a1"));
   assert.equal(names[0], "Artist a2");
+});
+
+test("marking an artist tentative for a date surfaces the next-best pick, without excluding them from other dates", () => {
+  const s = snap({
+    artists: {
+      a1: artist("a1", { talentScore: 3, drawScore: 3, importedLastPlayed: "2025-01-03" }),
+      a2: artist("a2", { talentScore: 1, drawScore: 1, importedLastPlayed: "2025-01-03" }),
+    },
+  });
+  let nights = runRecommendations(s, CFG, 2, TODAY);
+  const targetDate = nights[0].dateISO;
+  const otherDate = nights[1].dateISO;
+  assert.equal(nights[0].picks.map((p) => p.name)[0], "Artist a1", "a1 is the top pick before any tentative hold");
+
+  // Mark a1 tentative for the first date only.
+  const tent = snap({ ...s, tentatives: { [`a1|${targetDate}`]: true } });
+  tent.artists = s.artists; tent.requests = s.requests; tent.nights = s.nights;
+  nights = runRecommendations(tent, CFG, 2, TODAY);
+  const namesForTarget = nights.find((n) => n.dateISO === targetDate).picks.map((p) => p.name).filter(Boolean);
+  const namesForOther = nights.find((n) => n.dateISO === otherDate).picks.map((p) => p.name).filter(Boolean);
+  assert.ok(!namesForTarget.includes("Artist a1"), "tentative artist is skipped as the pick for that date");
+  assert.equal(namesForTarget[0], "Artist a2", "next-best artist is recommended instead");
+  assert.ok(namesForOther.includes("Artist a1"), "a1 remains eligible for a different date");
 });
 
 /* ---------- blackouts (§4): stratford buffers 14 days either side ---------- */

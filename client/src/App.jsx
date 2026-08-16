@@ -677,11 +677,12 @@ function sortEntries(entries) {
   return [...entries].sort((a, b) => orderOf(a) - orderOf(b));
 }
 
-function Lamps({ entries, writers }) {
+function Lamps({ entries, writers, tentatives }) {
   const dotStyle = (state) => {
     let bg = T.panel2, glow = "none", border = `1px solid ${T.line}`;
     if (state === "confirmed") { bg = T.amber; glow = `0 0 8px ${T.amber}`; border = `1px solid ${T.amber}`; }
     else if (state === "pending") { bg = "transparent"; border = `1px dashed ${T.amber}`; }
+    else if (state === "tentative") { bg = `linear-gradient(90deg, ${T.amber} 50%, ${T.panel2} 50%)`; border = `1px solid ${T.amber}`; }
     return { width: 11, height: 11, borderRadius: "50%", background: bg, boxShadow: glow, border, display: "inline-block" };
   };
 
@@ -710,6 +711,13 @@ function Lamps({ entries, writers }) {
   pending.forEach(() => {
     const open = SLOT_TIMES.find((t) => !state[t]);
     if (open) state[open] = "pending";
+  });
+  // Tentative holds fill any remaining open slots, lowest priority — a real
+  // confirmed or pending entry always takes visual precedence.
+  (tentatives || []).forEach((t) => {
+    if (t.slotLabel && SLOT_TIMES.includes(t.slotLabel) && !state[t.slotLabel]) { state[t.slotLabel] = "tentative"; return; }
+    const open = SLOT_TIMES.find((s) => !state[s]);
+    if (open) state[open] = "tentative";
   });
 
   return (
@@ -2338,11 +2346,11 @@ function AdminCalendar({ ctx }) {
                 {nightScore(dISO, entries) != null && (
                   <span style={{ fontSize: 11.5, color: T.amber, fontWeight: 700 }} title="Raw Talent + Draw of the confirmed bill. No recommendation bonuses.">Night score {nightScore(dISO, entries)}</span>
                 )}
-                <Lamps entries={entries} writers={writers} />
+                <Lamps entries={entries} writers={writers} tentatives={ctx.tentatives.filter((t) => t.dateISO === dISO)} />
               </div>
             </div>
             <div style={{ fontSize: 12.5, color: T.muted, marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
-              {entries.length === 0 ? "No entries" : sortEntries(entries).map((e, i) => {
+              {entries.length === 0 && !ctx.tentatives.some((t) => t.dateISO === dISO) ? "No entries" : sortEntries(entries).map((e, i) => {
                 const armKey = `${dISO}|${e.manual ? "m" + e.manualIndex : "r" + e.reqId}`;
                 const isArmed = removeArm === armKey;
                 const canRemove = e.manual || (e.reqId && e.status === "confirmed");
@@ -2378,6 +2386,12 @@ function AdminCalendar({ ctx }) {
                   </div>
                 );
               })}
+              {ctx.tentatives.filter((t) => t.dateISO === dISO).map((t) => (
+                <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ color: T.amber }}>{ctx.artists[t.artistId]?.name || "Artist"}</span>
+                  <span style={{ fontSize: 10.5, color: T.muted }}>· tentative{t.slotLabel ? `, ${t.slotLabel}` : ""} · reached out, not confirmed</span>
+                </div>
+              ))}
             </div>
             {(removeDrafts[dISO] || []).length > 0 && (
               <div style={{ marginTop: 10 }}>
@@ -2510,11 +2524,10 @@ function AdminRecommend({ ctx }) {
 
   async function toggleTentative(pick, night, isTentative) {
     try {
-      if (isTentative) {
-        await ctx.api.clearTentative(pick.artistId, night.dateISO);
-      } else {
-        await ctx.api.setTentative(pick.artistId, night.dateISO, pick.slot.label);
-      }
+      const r = isTentative
+        ? await ctx.api.clearTentative(pick.artistId, night.dateISO, weeks)
+        : await ctx.api.setTentative(pick.artistId, night.dateISO, pick.slot.label, weeks);
+      if (r.nights) setResults(r.nights);
       await ctx.refreshDesk();
     } catch (e) { ctx.flash(e.message || "Could not update tentative status."); }
   }
@@ -2563,7 +2576,7 @@ function AdminRecommend({ ctx }) {
                 {nightTentatives.map((t) => (
                   <span key={t.id} style={{ ...st.badge, borderColor: T.amber, color: T.amber, display: "inline-flex", alignItems: "center", gap: 5 }}>
                     {ctx.artists[t.artistId]?.name || "Artist"}{t.slotLabel ? ` · ${t.slotLabel}` : ""}
-                    <button onClick={async () => { try { await ctx.api.clearTentative(t.artistId, t.dateISO); await ctx.refreshDesk(); } catch (e) { ctx.flash(e.message || "Could not clear."); } }} style={{ background: "none", border: "none", color: T.amber, cursor: "pointer", padding: 0, fontSize: 11, lineHeight: 1 }}>✕</button>
+                    <button onClick={async () => { try { const r = await ctx.api.clearTentative(t.artistId, t.dateISO, weeks); if (r.nights) setResults(r.nights); await ctx.refreshDesk(); } catch (e) { ctx.flash(e.message || "Could not clear."); } }} style={{ background: "none", border: "none", color: T.amber, cursor: "pointer", padding: 0, fontSize: 11, lineHeight: 1 }}>✕</button>
                   </span>
                 ))}
               </div>

@@ -19,6 +19,7 @@ import { entriesFor, writersNight, artistUnavailableOn, isLocal, artistIsLocal, 
 
 export function runRecommendations(snap, cfg, weeks, today) {
   const recPasses = snap.recPasses || {};
+  const tentatives = snap.tentatives || {};
 
   // Every booked date per artist: past plays, future confirmations from app
   // requests, manual/imported calendar slots (matched by name), imported last-played.
@@ -85,6 +86,11 @@ export function runRecommendations(snap, cfg, weeks, today) {
       if (a.single) return false;
       if (artistUnavailableOn(a.raw, dISO)) return false;
       if (recPasses[`${a.id}|${dISO}`]) return false;
+      // Already reached out and marked tentative for this date: don't keep
+      // surfacing them as THE pick, so the venue can move on to the next
+      // candidate while still tracking who's tentative. This only excludes
+      // them for this specific date, not future ones.
+      if (tentatives[`${a.id}|${dISO}`]) return false;
       // Symmetric spacing: no booking (past OR future) within the window
       for (const b of a.booked) {
         if (Math.abs(daysBetween(dISO, b)) <= cfg.daysSincePlayed) return false;
