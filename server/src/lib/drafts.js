@@ -79,6 +79,19 @@ export function timeChangeEmailDraft(r, oldSlot) {
   return { subject: `Time update: The Bunker, ${fmtLong(r.date)} (now ${r.slotTime})`, body: lines.join("\n") };
 }
 
+export function tentativeReleaseEmailDraft(name, dateLabel) {
+  const lines = [];
+  lines.push(`Hi ${name},`);
+  lines.push("");
+  lines.push(`Thanks for your interest in playing The Bunker on ${dateLabel}. We've gone ahead and booked that date with another artist.`);
+  lines.push("");
+  lines.push("We'd love to find you a different Friday. Check the app for open dates, or reply here and we'll help you find one.");
+  lines.push("");
+  lines.push("Thanks for understanding,");
+  lines.push("The Bunker Performance Lounge");
+  return { subject: `Update on ${dateLabel} at The Bunker`, body: lines.join("\n") };
+}
+
 export function removalEmailDraft(r, reason) {
   const lines = [];
   lines.push(`Hi ${r.name},`);

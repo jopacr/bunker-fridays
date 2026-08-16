@@ -10,12 +10,13 @@ import {
   upsertArtist, getArtist, deleteArtist, reassignArtistRefs, updateRequest, getRequest,
   upsertNight, addDraft, listDrafts, addPing,
   addRecPass, clearRecPasses, purgePastRecPasses, audit, q, uid,
+  setTentative, clearTentative, tentativesForDate, allTentatives,
 } from "../services/store.js";
 import {
   planConfirmation, suggestFridays, takenSlots, nightScore, writersNight,
   entriesFor, hasPlayed, isLocal, SLOT_TIMES, pendingInBlackoutWindow,
 } from "../lib/rules.js";
-import { confirmEmailDraft, declineEmailDraft, timeChangeEmailDraft, removalEmailDraft, outreachEmailDraft, outreachShortText } from "../lib/drafts.js";
+import { confirmEmailDraft, declineEmailDraft, timeChangeEmailDraft, removalEmailDraft, outreachEmailDraft, outreachShortText, tentativeReleaseEmailDraft } from "../lib/drafts.js";
 import { runRecommendations } from "../lib/recommend.js";
 import { todayISO, fmtLong, fridaysAhead, iso } from "../lib/dates.js";
 import { sendEmail, mailerEnabled } from "../services/mailer.js";
@@ -42,16 +43,17 @@ adminRoutes.post("/push/subscribe", async (req, res) => {
 });
 
 adminRoutes.get("/state", async (_req, res) => {
-  const [snap, drafts, recConfig, escalations, kb] = await Promise.all([
+  const [snap, drafts, recConfig, escalations, kb, tentatives] = await Promise.all([
     snapshot(), listDrafts(), getRecConfig(),
     q("SELECT * FROM escalations ORDER BY ts DESC LIMIT 200"),
-    getKb(),
+    getKb(), allTentatives(),
   ]);
   res.json({
     ...publicSnap(snap),
     drafts,
     recConfig,
     kb,
+    tentatives,
     escalations: escalations.map((e) => ({ id: e.id, question: e.question, contact: e.contact, summary: e.summary, resolved: !!e.resolved, ts: e.ts })),
     today: todayISO(),
   });
@@ -89,6 +91,25 @@ adminRoutes.post("/requests/:id/decide", async (req, res) => {
     const phone = artist?.phone || target.phone || "";
     if (phone && smsEnabled()) {
       sendSms(phone, confirmSmsBody(target.name, fmtLong(target.date), plan.slotTime, config.infoEmail)).catch(() => {});
+    }
+
+    // Anyone else tentative for this same date has just lost the slot —
+    // let them know and clear the hold so it doesn't linger.
+    if (target.date) {
+      const others = (await tentativesForDate(target.date)).filter((t) => t.artistId !== target.artistId);
+      for (const t of others) {
+        const otherArtist = snap.artists[t.artistId];
+        if (otherArtist?.email) {
+          const rd = tentativeReleaseEmailDraft(otherArtist.name, fmtLong(target.date));
+          await addDraft({ to: otherArtist.email, subject: rd.subject, body: rd.body, kind: "follow-up", label: `Date filled · ${otherArtist.name} · ${fmtLong(target.date)}` });
+        }
+        pushToArtist(t.artistId, {
+          title: "That date's been booked",
+          body: `${fmtLong(target.date)} at The Bunker has been booked with another artist. Thanks for your interest — we'd love to find you a future Friday.`,
+          tag: "tentative-released",
+        }).catch(() => {});
+        await clearTentative(t.artistId, target.date);
+      }
     }
 
     return res.json({ ok: true, autoDeclined: plan.autoDecline.length, draft });
@@ -472,6 +493,27 @@ adminRoutes.post("/recommend/outreach", async (req, res) => {
   }
   await audit(req.adminEmail, "recommend.outreach", "artist", artistId || artistName, { date });
   res.json(out);
+});
+
+// Mark/clear "reached out, tentative" for an (artist, date). Advisory only —
+// doesn't block other recommendations for the same date, and multiple artists
+// can be tentative at once while the venue juggles responses.
+adminRoutes.post("/recommend/tentative", async (req, res) => {
+  const { artistId, date, slotLabel } = req.body || {};
+  if (!artistId || !date) return res.status(400).json({ error: "artistId and date required." });
+  const a = await getArtist(artistId);
+  if (!a) return res.status(404).json({ error: "Artist not found." });
+  await setTentative(artistId, date, slotLabel || null);
+  await audit(req.adminEmail, "recommend.tentative.set", "artist", artistId, { date, slotLabel });
+  res.json({ ok: true, tentatives: await tentativesForDate(date) });
+});
+
+adminRoutes.delete("/recommend/tentative", async (req, res) => {
+  const { artistId, date } = req.body || {};
+  if (!artistId || !date) return res.status(400).json({ error: "artistId and date required." });
+  await clearTentative(artistId, date);
+  await audit(req.adminEmail, "recommend.tentative.clear", "artist", artistId, { date });
+  res.json({ ok: true, tentatives: await tentativesForDate(date) });
 });
 
 adminRoutes.get("/recconfig", async (_req, res) => res.json(await getRecConfig()));

@@ -236,6 +236,32 @@ export async function pingsFor(artistId) {
     .map((r) => ({ id: r.id, msg: r.message, dateISO: r.date_iso, slotTime: r.slot_time, setType: r.set_type, read: !!r.read, ts: r.ts }));
 }
 
+/* ---------- tentative holds ---------- */
+// "I've reached out and they're tentative" per (artist, date). Purely
+// advisory — doesn't block other recommendations or requests for that date.
+export async function setTentative(artistId, dateISO, slotLabel) {
+  const id = uid();
+  await q(
+    `INSERT INTO tentative_holds (id, artist_id, date_iso, slot_label) VALUES ($1,$2,$3,$4)
+     ON CONFLICT (artist_id, date_iso) DO UPDATE SET slot_label = $4`,
+    [id, artistId, dateISO, slotLabel || null]
+  );
+}
+
+export async function clearTentative(artistId, dateISO) {
+  await q("DELETE FROM tentative_holds WHERE artist_id = $1 AND date_iso = $2", [artistId, dateISO]);
+}
+
+export async function tentativesForDate(dateISO) {
+  return (await q("SELECT * FROM tentative_holds WHERE date_iso = $1", [dateISO]))
+    .map((r) => ({ id: r.id, artistId: r.artist_id, dateISO: r.date_iso, slotLabel: r.slot_label, created: r.created }));
+}
+
+export async function allTentatives() {
+  return (await q("SELECT * FROM tentative_holds ORDER BY date_iso ASC", []))
+    .map((r) => ({ id: r.id, artistId: r.artist_id, dateISO: r.date_iso, slotLabel: r.slot_label, created: r.created }));
+}
+
 /* ---------- escalations ---------- */
 export async function addEscalation({ question, contact, summary }) {
   const id = uid();

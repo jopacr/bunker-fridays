@@ -320,3 +320,14 @@ test("cooldownBlock reports the blocking booking", () => {
   assert.equal(cooldownBlock(s, "a1", "a1@x.com", addDays(F1, 35)), null);
   assert.ok(cooldownBlock(s, "a1", "a1@x.com", addDays(F1, -7)), "cooldown now spaces both sides of the confirmed date");
 });
+
+test("cooldownBlock also honors a manually-set last-played date (e.g. a Saturday show)", () => {
+  const s = snap({
+    artists: { a1: artist("a1", { importedLastPlayed: F1 }) },
+    requests: [],
+  });
+  assert.equal(cooldownBlock(s, "a1", "a1@x.com", addDays(F1, 7)), F1, "within 28 days of the manual last-played date blocks");
+  assert.equal(cooldownBlock(s, "a1", "a1@x.com", addDays(F1, -7)), F1, "blocks symmetrically on the earlier side too");
+  assert.equal(cooldownBlock(s, "a1", "a1@x.com", addDays(F1, 35)), null, "outside the window is fine");
+  assert.equal(cooldownBlock(s, "a1", "a1@x.com", F1), null, "the same date (a second set that night) is not blocked");
+});

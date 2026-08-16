@@ -71,7 +71,18 @@ export function cooldownBlock(snap, artistId, email, dateISO) {
     const diff = Math.abs(daysBetween(dateISO, r.date));
     return diff > 0 && diff <= AUTO_DECLINE_DAYS;
   });
-  return hit ? hit.date : null;
+  if (hit) return hit.date;
+
+  // A manually-set "last played" date (a Saturday show, another event type,
+  // or a date carried from the booking doc during the live transition) also
+  // triggers the same spacing, even though it isn't itself an approved
+  // Friday request in this app.
+  const lastPlayed = artistId && snap.artists[artistId]?.importedLastPlayed;
+  if (lastPlayed) {
+    const diff = Math.abs(daysBetween(dateISO, lastPlayed));
+    if (diff > 0 && diff <= AUTO_DECLINE_DAYS) return lastPlayed;
+  }
+  return null;
 }
 
 export function hasPlayed(snap, artistId, today) {

@@ -343,6 +343,7 @@ export default function App() {
   const [adminAuthed, setAdminAuthed] = useState(false);
   const [kb, setKb] = useState("");
   const [escalations, setEscalations] = useState([]);
+  const [tentatives, setTentatives] = useState([]);
   const [session, setSession] = useState(null);
   const [recConfig, setRecConfig] = useState(DEFAULT_REC_CONFIG);
   const [pings, setPings] = useState({});
@@ -447,6 +448,7 @@ export default function App() {
       setOverrides(st8.nights || {});
       setDrafts(st8.drafts || []);
       setEscalations(st8.escalations || []);
+      setTentatives(st8.tentatives || []);
       setRecConfig({ ...DEFAULT_REC_CONFIG, ...(st8.recConfig || {}) });
       setKb(st8.kb || "");
       setServerToday(st8.today || null);
@@ -506,18 +508,25 @@ export default function App() {
   }
 
   // Returns the blocking confirmed date if the requested date falls within
-  // AUTO_DECLINE_DAYS after one of the artist's confirmed bookings.
+  // AUTO_DECLINE_DAYS either side of one of the artist's confirmed bookings,
+  // or a manually-set "last played" date (covers Saturday/other shows and the
+  // live transition from the booking doc).
   function cooldownBlock(artistId, email, dateISO) {
     const target = parseISO(dateISO);
+    const within = (otherISO) => {
+      const cd = parseISO(otherISO);
+      const diff = Math.abs(Math.round((target - cd) / 86400000));
+      return diff > 0 && diff <= AUTO_DECLINE_DAYS;
+    };
     const hit = requests.find((r) => {
-      if (r.status !== "approved") return false;
+      if (r.status !== "approved" || !r.date) return false;
       if (!(r.artistId === artistId || (email && r.email && r.email.toLowerCase() === email.toLowerCase()))) return false;
-      const cd = parseISO(r.date);
-      const end = new Date(cd);
-      end.setDate(end.getDate() + AUTO_DECLINE_DAYS);
-      return target > cd && target <= end;
+      return within(r.date);
     });
-    return hit ? hit.date : null;
+    if (hit) return hit.date;
+    const lastPlayed = artistId && artists[artistId]?.importedLastPlayed;
+    if (lastPlayed && within(lastPlayed)) return lastPlayed;
+    return null;
   }
 
   function hasPlayed(artistId) {
@@ -590,7 +599,7 @@ export default function App() {
     );
   }
 
-  const ctx = { requests, artists, overrides, kb, escalations, session, recConfig, pings, recPasses, drafts, calendar, info, serverToday, api, setSession, setPage, refreshArtist, refreshDesk, entriesFor, perNightCount, cooldownBlock, hasPlayed, takenSlots, suggestFridays, writersNight, artistUnavailableOn, flash, setRequestDate, resetToken, setResetToken };
+  const ctx = { requests, artists, overrides, kb, escalations, tentatives, session, recConfig, pings, recPasses, drafts, calendar, info, serverToday, api, setSession, setPage, refreshArtist, refreshDesk, entriesFor, perNightCount, cooldownBlock, hasPlayed, takenSlots, suggestFridays, writersNight, artistUnavailableOn, flash, setRequestDate, resetToken, setResetToken };
 
   return (
     <div style={st.shell}>
@@ -2499,6 +2508,17 @@ function AdminRecommend({ ctx }) {
     } catch (e) { ctx.flash(e.message || "Could not send the ping."); }
   }
 
+  async function toggleTentative(pick, night, isTentative) {
+    try {
+      if (isTentative) {
+        await ctx.api.clearTentative(pick.artistId, night.dateISO);
+      } else {
+        await ctx.api.setTentative(pick.artistId, night.dateISO, pick.slot.label);
+      }
+      await ctx.refreshDesk();
+    } catch (e) { ctx.flash(e.message || "Could not update tentative status."); }
+  }
+
   const cfgFields = [
     ["daysSincePlayed", "Days since played", "Min days since an artist last played before eligible again"],
     ["localBonus", "Local bonus", "Added when no local artist is on the bill yet"],
@@ -2534,6 +2554,21 @@ function AdminRecommend({ ctx }) {
       {results && results.map((night) => (
         <div key={night.dateISO} style={{ ...st.card, borderLeft: night.writers ? `3px solid ${T.amber}` : "3px solid transparent" }}>
           <div style={{ color: T.cream, fontWeight: 700 }}>{night.label} {night.writers && <span style={{ ...st.badge, marginLeft: 6 }}>WRITERS ROUND</span>}</div>
+          {(() => {
+            const nightTentatives = ctx.tentatives.filter((t) => t.dateISO === night.dateISO);
+            if (!nightTentatives.length) return null;
+            return (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                <span style={{ fontSize: 11, color: T.muted, alignSelf: "center" }}>Tentative for this date:</span>
+                {nightTentatives.map((t) => (
+                  <span key={t.id} style={{ ...st.badge, borderColor: T.amber, color: T.amber, display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    {ctx.artists[t.artistId]?.name || "Artist"}{t.slotLabel ? ` · ${t.slotLabel}` : ""}
+                    <button onClick={async () => { try { await ctx.api.clearTentative(t.artistId, t.dateISO); await ctx.refreshDesk(); } catch (e) { ctx.flash(e.message || "Could not clear."); } }} style={{ background: "none", border: "none", color: T.amber, cursor: "pointer", padding: 0, fontSize: 11, lineHeight: 1 }}>✕</button>
+                  </span>
+                ))}
+              </div>
+            );
+          })()}
           {night.picks.map((p, i) => {
             const key = `${night.dateISO}-${i}`;
             return (
@@ -2548,7 +2583,9 @@ function AdminRecommend({ ctx }) {
                     </div>
                     {p.name && <div style={{ fontSize: 11.5, color: T.muted }}>score {p.score}</div>}
                   </div>
-                  {p.name && (
+                  {p.name && (() => {
+                    const isTentative = ctx.tentatives.some((t) => t.artistId === p.artistId && t.dateISO === night.dateISO);
+                    return (
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       <button onClick={async () => {
                         try {
@@ -2563,9 +2600,13 @@ function AdminRecommend({ ctx }) {
                       {p.account && (
                         <button onClick={() => ping(p, night)} style={{ ...st.ghostBtn, fontSize: 12, padding: "6px 12px", borderColor: T.green, color: T.green }}>App ping</button>
                       )}
+                      <button onClick={() => toggleTentative(p, night, isTentative)} style={{ ...st.ghostBtn, fontSize: 12, padding: "6px 12px", borderColor: T.amber, color: T.amber, background: isTentative ? "rgba(212,163,79,0.12)" : "transparent" }}>
+                        {isTentative ? "Tentative ✓" : "Mark tentative"}
+                      </button>
                       <button onClick={() => passOn(p, night)} style={{ ...st.ghostBtn, fontSize: 12, padding: "6px 12px", borderColor: T.red, color: T.red }}>Pass</button>
                     </div>
-                  )}
+                    );
+                  })()}
                 </div>
                 {outreach && outreach.key === key && <DraftPanel d={outreach} flash={ctx.flash} api={ctx.api} onSent={() => ctx.refreshDesk()} onDismiss={() => setOutreach(null)} onToggleSent={outreach.id ? async () => {
                   try { await ctx.api.markDraftSent(outreach.id, !outreach.sent); await ctx.refreshDesk(); setOutreach({ ...outreach, sent: !outreach.sent }); } catch (e) {}
@@ -2656,6 +2697,7 @@ function AdminArtists({ ctx }) {
       instagram: a.instagram || "", facebook: a.facebook || "",
       originalsSets: a.originalsSets ?? "", coversSets: a.coversSets ?? "",
       etransferEmail: a.etransferEmail || "", local: !!a.local,
+      importedLastPlayed: a.importedLastPlayed || "",
     });
     setDelArm(null);
   }
@@ -2663,6 +2705,7 @@ function AdminArtists({ ctx }) {
   async function saveEdit() {
     if (!editF.name.trim()) { ctx.flash("Name can't be empty."); return; }
     const fields = Object.fromEntries(Object.entries(editF).map(([k, v]) => [k, typeof v === "string" ? v.trim() : v]));
+    if ("importedLastPlayed" in fields && !fields.importedLastPlayed) fields.importedLastPlayed = null;
     try { await ctx.api.saveArtist(editId, fields); await ctx.refreshDesk(); setEditId(null); ctx.flash("Artist details updated."); }
     catch (e) { ctx.flash(e.message || "Could not save."); }
   }
@@ -2813,12 +2856,13 @@ function AdminArtists({ ctx }) {
                 {a.links && (a.links.split(/\n+/).map((s) => s.trim()).filter(Boolean).map((lnk, i) => (
                   <div key={i}><a href={lnk.startsWith("http") ? lnk : `https://${lnk}`} target="_blank" rel="noreferrer" style={{ color: T.amber, fontSize: 12.5 }}>{lnk}</a></div>
                 )))}
-                {(String(a.originalsSets ?? "") !== "" || String(a.coversSets ?? "") !== "" || a.contactMethod) && (
+                {(String(a.originalsSets ?? "") !== "" || String(a.coversSets ?? "") !== "" || a.contactMethod || a.importedLastPlayed) && (
                   <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
                     {[
                       String(a.originalsSets ?? "") !== "" && `${a.originalsSets} originals`,
                       String(a.coversSets ?? "") !== "" && `${a.coversSets} covers`,
                       a.contactMethod && `prefers ${a.contactMethod}`,
+                      a.importedLastPlayed && `last played ${fmtLong(parseISO(a.importedLastPlayed))}`,
                     ].filter(Boolean).join(" · ")}
                   </div>
                 )}
@@ -2850,6 +2894,11 @@ function AdminArtists({ ctx }) {
                         <input type="checkbox" checked={!!editF.local} onChange={(e) => setEditF({ ...editF, local: e.target.checked })} />
                         Local (within ~20 min of Stratford)
                       </label>
+                      <div>
+                        <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>Last date played (covers Saturday/other shows, or the booking doc during the transition)</div>
+                        <input type="date" value={editF.importedLastPlayed} onChange={(e) => setEditF({ ...editF, importedLastPlayed: e.target.value })} style={st.input} />
+                        <div style={{ fontSize: 11, color: T.muted, marginTop: 3 }}>Drives the 28-day cooldown and the NEW tag, same as a confirmed Friday would.</div>
+                      </div>
                       <div style={{ display: "flex", gap: 8 }}>
                         <input placeholder="Email" value={editF.email} onChange={(e) => setEditF({ ...editF, email: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }} />
                         <input placeholder="Phone" value={editF.phone} onChange={(e) => setEditF({ ...editF, phone: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }} />
