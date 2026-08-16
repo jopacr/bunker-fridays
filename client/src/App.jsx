@@ -2203,11 +2203,16 @@ function AdminInbox({ ctx }) {
           </div>
         );
       })()}
-      {!actions && (
+      {!actions && r.status !== "approved" && (
         <div style={{ marginTop: 4 }}>
           <button onClick={() => (deletingId === r.id ? removeReq(r.id) : setDeletingId(r.id))} onBlur={() => setDeletingId(null)} style={{ ...st.ghostBtn, fontSize: 11.5, padding: "4px 10px", borderColor: T.red, color: T.red }}>
             {deletingId === r.id ? "Tap again to remove" : "Remove from inbox"}
           </button>
+        </div>
+      )}
+      {!actions && r.status === "approved" && (
+        <div style={{ marginTop: 4, fontSize: 11, color: T.muted }}>
+          Confirmed booking — release it from the Calendar tab (Cancel) if it needs to come off the books.
         </div>
       )}
       </div>

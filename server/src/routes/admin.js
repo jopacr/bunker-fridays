@@ -135,6 +135,11 @@ adminRoutes.post("/requests/:id/decide", async (req, res) => {
 
 adminRoutes.delete("/requests/:id", async (req, res) => {
   const id = req.params.id;
+  const target = await getRequest(id);
+  if (!target) return res.status(404).json({ error: "Request not found." });
+  if (target.status === "approved") {
+    return res.status(409).json({ error: "That's a confirmed booking. Use Cancel from the Calendar tab to release it properly — it'll notify the artist and clear the slot." });
+  }
   await q("DELETE FROM drafts WHERE req_id = $1", [id]);
   await q("DELETE FROM requests WHERE id = $1", [id]);
   await audit(req.adminEmail, "request.delete", "request", id, {});
