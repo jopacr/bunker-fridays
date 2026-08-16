@@ -13,7 +13,7 @@ import {
 } from "../services/store.js";
 import {
   planConfirmation, suggestFridays, takenSlots, nightScore, writersNight,
-  entriesFor, hasPlayed, isLocal, SLOT_TIMES,
+  entriesFor, hasPlayed, isLocal, SLOT_TIMES, pendingInBlackoutWindow,
 } from "../lib/rules.js";
 import { confirmEmailDraft, declineEmailDraft, timeChangeEmailDraft, removalEmailDraft, outreachEmailDraft, outreachShortText } from "../lib/drafts.js";
 import { runRecommendations } from "../lib/recommend.js";
@@ -268,6 +268,45 @@ adminRoutes.put("/artists/:id", async (req, res) => {
   const updated = await upsertArtist(req.params.id, fields);
   await audit(req.adminEmail, "artist.update", "artist", req.params.id, { fields: Object.keys(fields) });
   res.json({ ok: true, artist: updated });
+});
+
+// Venue-entered blackout dates — same rules as the artist's own self-service
+// version (range support, 2-week Stratford buffer, auto-decline pending
+// requests in the window), for cases where the venue knows an artist is
+// unavailable and wants it reflected without waiting on the artist.
+adminRoutes.post("/artists/:id/blackouts", async (req, res) => {
+  const a = await getArtist(req.params.id);
+  if (!a) return res.status(404).json({ error: "Artist not found." });
+  const { date, dateTo, reason } = req.body || {};
+  const today = todayISO();
+  if (!date || date < today) return res.status(400).json({ error: "Pick a future start date." });
+  if (!["stratford", "other"].includes(reason)) return res.status(400).json({ error: "Pick a reason." });
+  const rangeEnd = dateTo && dateTo >= date ? dateTo : null;
+  const snap = await snapshot();
+  const entry = rangeEnd ? { date, dateTo: rangeEnd, reason } : { date, reason };
+  const next = [...(a.blackouts || []), entry].sort((x, y) => x.date.localeCompare(y.date));
+  await upsertArtist(req.params.id, { blackouts: next });
+
+  const autoDeclined = [];
+  if (reason === "stratford") {
+    const pending = pendingInBlackoutWindow(snap.requests, req.params.id, date, rangeEnd);
+    for (const r of pending) {
+      await updateRequest(r.id, { status: "declined", auto: true, autoReason: `Stratford blackout ${date}${rangeEnd ? ` to ${rangeEnd}` : ""}` });
+      autoDeclined.push(r.date);
+    }
+  }
+  await audit(req.adminEmail, "artist.blackout.add", "artist", req.params.id, { date, dateTo: rangeEnd, reason, autoDeclined: autoDeclined.length });
+  res.json({ ok: true, blackouts: next, autoDeclined });
+});
+
+adminRoutes.delete("/artists/:id/blackouts", async (req, res) => {
+  const a = await getArtist(req.params.id);
+  if (!a) return res.status(404).json({ error: "Artist not found." });
+  const { date, reason } = req.body || {};
+  const next = (a.blackouts || []).filter((b) => !(b.date === date && b.reason === reason));
+  await upsertArtist(req.params.id, { blackouts: next });
+  await audit(req.adminEmail, "artist.blackout.remove", "artist", req.params.id, { date, reason });
+  res.json({ ok: true, blackouts: next });
 });
 
 // Merge two artist records into one. Used when an imported booking-doc artist

@@ -1774,6 +1774,83 @@ function BlackoutCard({ ctx, artist }) {
   );
 }
 
+// Venue-side version of BlackoutCard: same range + reason UI, but calls the
+// admin endpoints (so it works from the venue's own session on an artist's
+// record) and refreshes the desk snapshot instead of the artist's own view.
+function AdminBlackoutEditor({ ctx, artist }) {
+  const [date, setDate] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [isRange, setIsRange] = useState(false);
+  const [reason, setReason] = useState("other");
+  const today = iso(new Date());
+  const blackouts = (artist.blackouts || []).filter((b) => {
+    const tail = b.dateTo || b.date;
+    const keepUntil = parseISO(tail);
+    keepUntil.setDate(keepUntil.getDate() + (b.reason === "stratford" ? 14 : 0));
+    return iso(keepUntil) >= today;
+  });
+
+  async function add() {
+    if (!date) return;
+    if (date < today) { ctx.flash("Pick a future date."); return; }
+    if (isRange && dateTo && dateTo < date) { ctx.flash("End date must be after the start date."); return; }
+    const rangeEnd = isRange && dateTo && dateTo >= date ? dateTo : null;
+    try {
+      const r = await ctx.api.adminAddBlackout(artist.id, date, reason, rangeEnd);
+      await ctx.refreshDesk();
+      setDate(""); setDateTo("");
+      ctx.flash(r.autoDeclined?.length
+        ? `Blackout added. ${r.autoDeclined.length} pending request${r.autoDeclined.length > 1 ? "s" : ""} in that window were auto-declined.`
+        : "Blackout added for this artist.");
+    } catch (e) { ctx.flash(e.message || "Could not save that date."); }
+  }
+
+  async function remove(idx) {
+    const b = blackouts[idx];
+    if (!b) return;
+    try { await ctx.api.adminRemoveBlackout(artist.id, b.date, b.reason); await ctx.refreshDesk(); }
+    catch (e) { ctx.flash(e.message || "Could not remove that date."); }
+  }
+
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: T.amber, marginBottom: 6 }}>Blackout dates</div>
+      {blackouts.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+          {blackouts.map((b, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12.5, color: T.cream }}>
+                {fmtLong(parseISO(b.date))}{b.dateTo && b.dateTo !== b.date ? ` to ${fmtLong(parseISO(b.dateTo))}` : ""}
+              </span>
+              <span style={{ ...st.badge, borderColor: b.reason === "stratford" ? T.amber : T.muted, color: b.reason === "stratford" ? T.amber : T.muted }}>
+                {b.reason === "stratford" ? "STRATFORD · 2WK BUFFER" : "UNAVAILABLE"}
+              </span>
+              <button onClick={() => remove(i)} style={{ ...st.ghostBtn, fontSize: 11, padding: "2px 8px", marginLeft: "auto" }}>Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: T.muted, cursor: "pointer" }}>
+          <input type="checkbox" checked={isRange} onChange={(e) => { setIsRange(e.target.checked); if (!e.target.checked) setDateTo(""); }} />
+          Block a date range
+        </label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input type="date" placeholder={isRange ? "From" : "Date"} value={date} onChange={(e) => setDate(e.target.value)} style={{ ...st.input, flex: 1, minWidth: 0 }} />
+          {isRange && (
+            <input type="date" placeholder="To" value={dateTo} min={date || today} onChange={(e) => setDateTo(e.target.value)} style={{ ...st.input, flex: 1, minWidth: 0 }} />
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Choice active={reason === "other"} onClick={() => setReason("other")} title="Just unavailable" sub="Only this date is blocked" />
+          <Choice active={reason === "stratford"} onClick={() => setReason("stratford")} title="Playing elsewhere in Stratford" sub="Blocks 2 weeks either side" />
+        </div>
+        <button onClick={add} style={{ ...st.ghostBtn, alignSelf: "flex-start" }}>Add blackout{isRange ? " range" : " date"}</button>
+      </div>
+    </div>
+  );
+}
+
 /* ============================================================
    ADMIN
    ============================================================ */
@@ -2791,6 +2868,9 @@ function AdminArtists({ ctx }) {
                       </div>
                       <input placeholder="Music links" value={editF.links} onChange={(e) => setEditF({ ...editF, links: e.target.value })} style={st.input} />
                       <input placeholder="E-transfer email (if different)" value={editF.etransferEmail} onChange={(e) => setEditF({ ...editF, etransferEmail: e.target.value })} style={st.input} />
+                    </div>
+                    <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${T.line}` }}>
+                      <AdminBlackoutEditor ctx={ctx} artist={a} />
                     </div>
                     <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
                       <button onClick={saveEdit} style={st.amberBtn}>Save details</button>

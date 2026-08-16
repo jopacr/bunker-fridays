@@ -6,7 +6,7 @@ import { uid, tx } from "../db.js";
 import { todayISO, fridaysAhead, fmtLong, daysBetween } from "../lib/dates.js";
 import {
   entriesFor, writersNight, takenSlots, nightScore, validateRequestFields,
-  checkSubmission, MAX_PHOTOS, EVENT_TYPES, isLocal,
+  checkSubmission, MAX_PHOTOS, EVENT_TYPES, isLocal, pendingInBlackoutWindow,
 } from "../lib/rules.js";
 import {
   snapshot, getKb, insertRequest, upsertArtist, findArtistByEmail, getRequest,
@@ -177,10 +177,7 @@ publicRoutes.post("/me/blackouts", requireArtist, async (req, res) => {
   // For a Stratford blackout: auto-decline pending requests in the buffer window.
   const autoDeclined = [];
   if (reason === "stratford") {
-    const pending = snap.requests.filter(
-      (r) => r.artistId === req.artistId && r.status === "pending" && r.date &&
-              (Math.abs(daysBetween(r.date, date)) <= 14 || (rangeEnd && Math.abs(daysBetween(r.date, rangeEnd)) <= 14) || (r.date >= date && r.date <= (rangeEnd || date)))
-    );
+    const pending = pendingInBlackoutWindow(snap.requests, req.artistId, date, rangeEnd);
     for (const r of pending) {
       await updateRequest(r.id, { status: "declined", auto: true, autoReason: `Stratford blackout ${date}${rangeEnd ? ` to ${rangeEnd}` : ""}` });
       autoDeclined.push(r.date);

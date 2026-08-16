@@ -89,6 +89,17 @@ export function artistIsLocal(a, localCities) {
 
 /** Effective unavailability: imported dates + self-set blackouts.
     A Stratford-gig blackout blocks 14 days either side at the Bunker; "other" blocks the date. */
+// Pending requests from this artist that fall inside a Stratford blackout's
+// 14-day-either-side buffer (or literally inside a range). Shared by the
+// artist self-service blackout route and the venue's manual-entry version so
+// both auto-decline the same way.
+export function pendingInBlackoutWindow(requests, artistId, date, rangeEnd) {
+  return requests.filter(
+    (r) => r.artistId === artistId && r.status === "pending" && r.date &&
+            (Math.abs(daysBetween(r.date, date)) <= 14 || (rangeEnd && Math.abs(daysBetween(r.date, rangeEnd)) <= 14) || (r.date >= date && r.date <= (rangeEnd || date)))
+  );
+}
+
 export function artistUnavailableOn(a, dISO) {
   if ((a.unavailableDates || []).includes(dISO)) return true;
   for (const b of (a.blackouts || [])) {
