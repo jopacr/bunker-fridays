@@ -23,6 +23,7 @@ import { sendEmail, mailerEnabled } from "../services/mailer.js";
 import { config } from "../config.js";
 import { pushToArtist, pushToVenue } from "../services/push.js";
 import { sendSms, confirmSmsBody, smsEnabled } from "../services/sms.js";
+import { rewriteBiosForPromo } from "../services/bioAi.js";
 
 export const adminRoutes = express.Router();
 adminRoutes.use(requireAdmin);
@@ -35,11 +36,13 @@ const CANDACE_EMAIL = "mrscandacecrawford@gmail.com";
 
 async function buildAndSavePromoDraft(snap, date, lineup) {
   const writers = writersNight(snap, date);
+  const withBios = lineup.filter((a) => a.artist?.bio);
+  const rewritten = await rewriteBiosForPromo(withBios.map((a) => ({ name: a.name, bio: a.artist.bio })));
   const resolved = lineup.map((a) => ({
     name: a.name,
     slotTime: a.slotTime,
     setType: a.setType,
-    bio: standardizeBio(a.artist?.bio),
+    bio: a.artist?.bio ? (rewritten[a.name] || standardizeBio(a.artist.bio)) : null,
     photoUrl: (a.artist?.photos || [])[0] || null,
     links: a.artist?.links || null,
   }));
