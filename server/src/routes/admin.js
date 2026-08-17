@@ -215,8 +215,8 @@ adminRoutes.post("/nights/:date/manual", async (req, res) => {
   }
   const slots = [...(snap.nights[date]?.slots || []), {
     name: name.trim(),
-    setType: ["covers", "originals", "writers-round"].includes(setType) ? setType : "covers",
-    status: ["confirmed", "pencilled"].includes(status) ? status : "confirmed",
+    setType: ["covers", "single-originals", "writers-round"].includes(setType) ? setType : "covers",
+    status: ["confirmed", "pending", "tentative"].includes(status) ? status : "confirmed",
     slotTime: SLOT_TIMES.includes(slotTime) ? slotTime : null,
     source: "website inquiry",
   }];

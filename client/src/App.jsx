@@ -702,6 +702,7 @@ function Lamps({ entries, writers, tentatives }) {
   const state = { "8PM": null, "9PM": null, "10PM": null };
   const confirmed = entries.filter((e) => e.status === "confirmed");
   const pending = entries.filter((e) => e.status === "pending");
+  const entryTentative = entries.filter((e) => e.status === "tentative");
   confirmed.forEach((e) => { if (e.slotTime && !state[e.slotTime]) state[e.slotTime] = "confirmed"; });
   confirmed.filter((e) => !e.slotTime || state[e.slotTime] !== "confirmed").forEach((e) => {
     if (e.slotTime && state[e.slotTime] === "confirmed") return;
@@ -712,8 +713,14 @@ function Lamps({ entries, writers, tentatives }) {
     const open = SLOT_TIMES.find((t) => !state[t]);
     if (open) state[open] = "pending";
   });
-  // Tentative holds fill any remaining open slots, lowest priority — a real
-  // confirmed or pending entry always takes visual precedence.
+  // Tentative holds (both a manually-entered tentative slot and the
+  // "reached out" recommend-tab tracking) fill any remaining open slots,
+  // lowest priority — a real confirmed or pending entry always wins.
+  entryTentative.forEach((e) => {
+    if (e.slotTime && !state[e.slotTime]) { state[e.slotTime] = "tentative"; return; }
+    const open = SLOT_TIMES.find((t) => !state[t]);
+    if (open) state[open] = "tentative";
+  });
   (tentatives || []).forEach((t) => {
     if (t.slotLabel && SLOT_TIMES.includes(t.slotLabel) && !state[t.slotLabel]) { state[t.slotLabel] = "tentative"; return; }
     const open = SLOT_TIMES.find((s) => !state[s]);
@@ -2468,6 +2475,7 @@ function AdminCalendar({ ctx }) {
                   <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }}>
                     <option value="confirmed">Confirmed</option>
                     <option value="pending">Pending</option>
+                    <option value="tentative">Tentative (we/they reached out)</option>
                   </select>
                   <select value={f.slotTime} onChange={(e) => setF({ ...f, slotTime: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }}>
                     <option value="">No set time</option>
