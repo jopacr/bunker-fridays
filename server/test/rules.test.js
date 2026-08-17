@@ -386,6 +386,24 @@ test("nightConfirmedLineup only returns a full night once all 3 sets are confirm
   assert.equal(lineup[0].artist, null, "a manual entry with no linked account has no artist record");
 });
 
+test("nightConfirmedLineup resolves a manual entry's artist record by name, so its bio/photos aren't lost", () => {
+  const withPhoto = artist("a1", { name: "Echo Theory Project", bio: "Dreamy indie rock.", photos: ["https://pub-x.r2.dev/artists/a1/1.jpg"] });
+  const s = snap({
+    artists: { a1: withPhoto },
+    nights: { [F1]: { closed: false, slots: [
+      { name: "Echo Theory Project", setType: "covers", status: "confirmed", slotTime: "8PM", source: "website inquiry" },
+      { name: "Some Other Act", setType: "covers", status: "confirmed", slotTime: "9PM" },
+      { name: "Third Act", setType: "covers", status: "confirmed", slotTime: "10PM" },
+    ] } },
+  });
+  const lineup = nightConfirmedLineup(s, F1);
+  const echo = lineup.find((x) => x.name === "Echo Theory Project");
+  assert.equal(echo.artist?.id, "a1", "a manual entry whose name matches an artist account resolves that record");
+  assert.equal(echo.artist?.photos?.[0], "https://pub-x.r2.dev/artists/a1/1.jpg");
+  const other = lineup.find((x) => x.name === "Some Other Act");
+  assert.equal(other.artist, null, "a name with no matching account still resolves to null, not a wrong guess");
+});
+
 test("standardizeBio trims long bios at a sentence boundary and leaves short ones alone", () => {
   assert.equal(standardizeBio(""), null);
   assert.equal(standardizeBio(null), null);

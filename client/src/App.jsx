@@ -2081,7 +2081,7 @@ function AdminInbox({ ctx }) {
       <div>
       <div style={st.card}>
         <div style={{ display: "flex", gap: 12 }}>
-          {pics[0] && <img src={pics[0]} alt="" style={{ width: 48, height: 48, borderRadius: 6, objectFit: "cover" }} />}
+          {pics[0] && <a href={pics[0]} target="_blank" rel="noreferrer" title="Open full size"><img src={pics[0]} alt="" style={{ width: 48, height: 48, borderRadius: 6, objectFit: "cover", display: "block" }} /></a>}
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
               <div style={{ color: T.cream, fontWeight: 700 }}>
@@ -2919,7 +2919,7 @@ function AdminArtists({ ctx }) {
         return (
           <div key={a.id} style={st.card}>
             <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-              {pics[0] ? <img src={pics[0]} alt="" style={{ width: 44, height: 44, borderRadius: 6, objectFit: "cover" }} /> :
+              {pics[0] ? <a href={pics[0]} target="_blank" rel="noreferrer" title="Open full size"><img src={pics[0]} alt="" style={{ width: 44, height: 44, borderRadius: 6, objectFit: "cover", display: "block" }} /></a> :
                 <div style={{ width: 44, height: 44, borderRadius: 6, background: T.panel2, display: "flex", alignItems: "center", justifyContent: "center", color: T.amber, fontFamily: "'Bebas Neue', sans-serif", fontSize: 20 }}>{(a.name || "?")[0]}</div>}
               <div style={{ flex: 1 }}>
                 <div style={{ color: T.cream, fontWeight: 700 }}>
@@ -2947,19 +2947,24 @@ function AdminArtists({ ctx }) {
                   </div>
                 )}
                 {a.bio && <BioBlock text={a.bio} />}
-                {pics.length > 1 && (
+                {pics.length > 0 && (
                   <div style={{ marginTop: 6 }}>
-                    <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>Tap a photo to make it the headshot.</div>
-                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                    <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>Tap a photo to open full size (for posters, download, etc).</div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       {pics.map((p, i) => (
-                        <button key={i} title={i === 0 ? "Current headshot" : "Set as headshot"} onClick={async () => {
-                          if (i === 0) return;
-                          const next = [p, ...pics.filter((_, j) => j !== i)];
-                          try { await ctx.api.saveArtist(a.id, { photos: next }); await ctx.refreshDesk(); ctx.flash(`Headshot updated for ${a.name}.`); }
-                          catch (er) { ctx.flash(er.message || "Could not update the headshot."); }
-                        }} style={{ padding: 0, border: i === 0 ? `2px solid ${T.amber}` : `1px solid ${T.line}`, borderRadius: 6, background: "none", cursor: i === 0 ? "default" : "pointer", lineHeight: 0 }}>
-                          <img src={p} alt="" style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 4, display: "block" }} />
-                        </button>
+                        <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                          <a href={p} target="_blank" rel="noreferrer" title="Open full size" style={{ display: "block", border: i === 0 ? `2px solid ${T.amber}` : `1px solid ${T.line}`, borderRadius: 6, lineHeight: 0 }}>
+                            <img src={p} alt="" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 4, display: "block" }} />
+                          </a>
+                          {i === 0
+                            ? <span style={{ fontSize: 9.5, color: T.amber }}>Headshot</span>
+                            : <button onClick={async () => {
+                                const next = [p, ...pics.filter((_, j) => j !== i)];
+                                try { await ctx.api.saveArtist(a.id, { photos: next }); await ctx.refreshDesk(); ctx.flash(`Headshot updated for ${a.name}.`); }
+                                catch (er) { ctx.flash(er.message || "Could not update the headshot."); }
+                              }} style={{ fontSize: 9.5, color: T.muted, background: "none", border: "none", cursor: "pointer", padding: 0, textDecoration: "underline" }}>Set headshot</button>
+                          }
+                        </div>
                       ))}
                     </div>
                   </div>

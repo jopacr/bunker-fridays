@@ -51,13 +51,17 @@ export function entriesFor(snap, dateISO) {
 // where it doesn't (manual/website-inquiry entries without an account). Used
 // to build the fully-booked promo email to Candace.
 export function nightConfirmedLineup(snap, dateISO) {
+  const byName = {};
+  Object.values(snap.artists).forEach((a) => { byName[(a.name || "").trim().toLowerCase()] = a; });
+  const lookup = (name) => byName[(name || "").trim().toLowerCase()] || null;
+
   const ov = snap.nights[dateISO] || {};
   const fromManual = (ov.slots || [])
     .filter((s) => s.status === "confirmed")
-    .map((s) => ({ name: s.name, setType: s.setType, slotTime: s.slotTime || null, artist: null }));
+    .map((s) => ({ name: s.name, setType: s.setType, slotTime: s.slotTime || null, artist: lookup(s.name) }));
   const fromRequests = snap.requests
     .filter((r) => r.date === dateISO && r.status === "approved")
-    .map((r) => ({ name: r.name, setType: r.setType, slotTime: r.slotTime || null, artist: r.artistId ? snap.artists[r.artistId] || null : null }));
+    .map((r) => ({ name: r.name, setType: r.setType, slotTime: r.slotTime || null, artist: (r.artistId && snap.artists[r.artistId]) || lookup(r.name) }));
   const lineup = [...fromManual, ...fromRequests];
   const order = { "8PM": 0, "9PM": 1, "10PM": 2 };
   lineup.sort((a, b) => (order[a.slotTime] ?? 9) - (order[b.slotTime] ?? 9));
