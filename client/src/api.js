@@ -69,6 +69,7 @@ export const api = {
   setWriters: (date, writersOverride) => req("POST", `/admin/nights/${date}/writers`, { writersOverride }),
   addManual: (date, payload) => req("POST", `/admin/nights/${date}/manual`, payload),
   setManualStatus: (date, idx, status) => req("POST", `/admin/nights/${date}/manual/${idx}/status`, { status }),
+  setManualSetType: (date, idx, setType) => req("POST", `/admin/nights/${date}/manual/${idx}/settype`, { setType }),
   draftNightPromo: (date) => req("POST", `/admin/nights/${date}/promo`),
   removeManual: (date, idx) => req("DELETE", `/admin/nights/${date}/manual/${idx}`),
   applyTimes: (date, changes) => req("POST", `/admin/nights/${date}/times`, { changes }),

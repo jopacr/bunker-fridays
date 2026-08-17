@@ -7,14 +7,14 @@ import { config } from "../config.js";
 
 export const mailerEnabled = () => !!config.resendKey;
 
-export async function sendEmail({ to, subject, text, html }) {
+export async function sendEmail({ to, subject, text, html, bcc }) {
   if (!config.resendKey) {
     return { ok: false, error: "Email sending is not configured (RESEND_API_KEY). Use the mailto link or copy the draft." };
   }
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.resendKey}` },
-    body: JSON.stringify({ from: config.fromEmail, to: [to], subject, text, html }),
+    body: JSON.stringify({ from: config.fromEmail, to: [to], subject, text, html, ...(bcc ? { bcc: [bcc] } : {}) }),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");

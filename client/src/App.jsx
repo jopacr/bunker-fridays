@@ -2271,6 +2271,7 @@ function AdminCalendar({ ctx }) {
   })();
   const [adding, setAdding] = useState(null);
   const [f, setF] = useState({ name: "", email: "", setType: "covers", status: "confirmed", slotTime: "" });
+  const [setTypeTouched, setSetTypeTouched] = useState(false);
   const [removeArm, setRemoveArm] = useState(null); // "dateISO|idx"
   const [timesOpen, setTimesOpen] = useState(null); // dateISO
   const [calDrafts, setCalDrafts] = useState([]);
@@ -2314,7 +2315,7 @@ function AdminCalendar({ ctx }) {
     try {
       await ctx.api.addManual(adding, { name: f.name.trim(), email: f.email.trim(), setType: f.setType, status: f.status, slotTime: f.slotTime || null });
       await ctx.refreshDesk();
-      setAdding(null); setF({ name: "", email: "", setType: "covers", status: "confirmed", slotTime: "" });
+      setAdding(null); setF({ name: "", email: "", setType: "covers", status: "confirmed", slotTime: "" }); setSetTypeTouched(false);
       ctx.flash("Logged. The calendar updated for everyone.");
     } catch (e) { ctx.flash(e.message || "Could not log that entry."); }
   }
@@ -2364,13 +2365,21 @@ function AdminCalendar({ ctx }) {
               const promoDraft = ctx.drafts.find((dr) => dr.kind === "promo" && dr.nightDate === dISO);
               if (promoDraft) {
                 return (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
                     <button onClick={async () => {
                       try { await ctx.api.markDraftSent(promoDraft.id, !promoDraft.sent); await ctx.refreshDesk(); }
                       catch (er) { ctx.flash(er.message || "Could not update."); }
                     }} style={{ ...st.ghostBtn, fontSize: 11, padding: "3px 9px", borderColor: promoDraft.sent ? T.green : T.amber, color: promoDraft.sent ? T.green : T.amber }}>
                       Lineup email to Candace: {promoDraft.sent ? "Sent ✓" : "Not sent"}
                     </button>
+                    <button onClick={async () => {
+                      try {
+                        const r = await ctx.api.draftNightPromo(dISO);
+                        await ctx.refreshDesk();
+                        ctx.flash("Lineup email regenerated with the latest details.");
+                        if (r.draft) setCalDrafts((p) => [...p, { ...r.draft, key: `promo-${dISO}-${Date.now()}` }]);
+                      } catch (er) { ctx.flash(er.message || "Could not regenerate the lineup email."); }
+                    }} style={{ ...st.ghostBtn, fontSize: 11, padding: "3px 9px" }}>Regenerate</button>
                   </div>
                 );
               }
@@ -2425,12 +2434,26 @@ function AdminCalendar({ ctx }) {
                     }
                   } catch (er) { ctx.flash(er.message || "Could not update status."); }
                 }
+                async function changeSetType(newType) {
+                  try {
+                    await ctx.api.setManualSetType(dISO, e.manualIndex, newType);
+                    await ctx.refreshDesk();
+                    ctx.flash(`${e.name} updated to ${SET_LABELS[newType] || newType}.`);
+                  } catch (er) { ctx.flash(er.message || "Could not update set type."); }
+                }
+                const shortSetLabel = e.setType === "single-originals" ? "originals" : e.setType === "writers-round" ? "writers round" : "covers";
                 return (
                   <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
                     {!writers && <span style={{ color: e.slotTime ? T.amber : T.muted, fontFamily: "'Bebas Neue', sans-serif", letterSpacing: 1, fontSize: 13, minWidth: 34 }}>{e.slotTime || "—"}</span>}
                     <span style={{ color: T.cream }}>{e.name}</span>
+                    <span style={{ fontSize: 11, color: e.setType === "single-originals" ? T.amber : T.muted }}>{shortSetLabel}</span>
                     <span style={{ color: e.status === "confirmed" ? T.green : T.amberDim, fontSize: 11.5 }}>{e.status}</span>
                     <span style={{ fontSize: 10.5, color: T.muted }}>{e.manual ? "manual" : "via app"}</span>
+                    {e.manual && !writers && (
+                      <button onClick={() => changeSetType(e.setType === "single-originals" ? "covers" : "single-originals")} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px" }}>
+                        {e.setType === "single-originals" ? "Mark covers" : "Mark originals"}
+                      </button>
+                    )}
                     {e.manual && e.status !== "confirmed" && (
                       <button onClick={() => changeStatus("confirmed")} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px", borderColor: T.green, color: T.green }}>Mark confirmed</button>
                     )}
@@ -2521,7 +2544,7 @@ function AdminCalendar({ ctx }) {
                 <input placeholder="Artist name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={st.input} />
                 <input placeholder="Email (optional — needed to send a confirmation later)" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={st.input} />
                 <div style={{ display: "flex", gap: 8 }}>
-                  <select value={f.setType} onChange={(e) => setF({ ...f, setType: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }}>
+                  <select value={f.setType} onChange={(e) => { setSetTypeTouched(true); setF({ ...f, setType: e.target.value }); }} style={{ ...st.input, flex: 1, minWidth: 0 }}>
                     <option value="single-originals">Originals set</option>
                     <option value="covers">Covers set</option>
                     <option value="writers-round">Writers Round</option>
@@ -2531,7 +2554,13 @@ function AdminCalendar({ ctx }) {
                     <option value="pending">Pending (they've asked, awaiting our decision)</option>
                     <option value="tentative">Tentative (we've reached out, no commitment yet)</option>
                   </select>
-                  <select value={f.slotTime} onChange={(e) => setF({ ...f, slotTime: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }}>
+                  <select value={f.slotTime} onChange={(e) => {
+                    const t = e.target.value;
+                    // Nudge the set type toward house convention (9PM = originals)
+                    // unless the venue has already picked one on purpose.
+                    const suggested = t === "9PM" ? "single-originals" : t === "8PM" || t === "10PM" ? "covers" : f.setType;
+                    setF({ ...f, slotTime: t, setType: setTypeTouched ? f.setType : suggested });
+                  }} style={{ ...st.input, flex: 1, minWidth: 0 }}>
                     <option value="">No set time</option>
                     {SLOT_TIMES.filter((t) => !entries.some((e) => e.status === "confirmed" && e.slotTime === t)).map((t) => (
                       <option key={t} value={t}>{t}</option>

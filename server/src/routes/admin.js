@@ -293,6 +293,23 @@ adminRoutes.post("/nights/:date/manual/:idx/status", async (req, res) => {
   res.json({ ok: true, slots, draft, promoDraft });
 });
 
+// Correct a manual entry's set type after the fact — e.g. it was added as
+// covers by mistake (the form's default) when it's actually an originals set.
+adminRoutes.post("/nights/:date/manual/:idx/settype", async (req, res) => {
+  const date = req.params.date;
+  const idx = parseInt(req.params.idx, 10);
+  const { setType } = req.body || {};
+  if (!["covers", "single-originals", "writers-round"].includes(setType)) return res.status(400).json({ error: "Invalid set type." });
+  const snap = await snapshot();
+  const cur = snap.nights[date]?.slots || [];
+  if (!(idx >= 0 && idx < cur.length)) return res.status(404).json({ error: "Entry not found." });
+  const target = cur[idx];
+  const slots = cur.map((s, i) => (i === idx ? { ...s, setType } : s));
+  await upsertNight(date, { slots });
+  await audit(req.adminEmail, "night.manual.settype", "night", date, { name: target.name, from: target.setType, to: setType });
+  res.json({ ok: true, slots });
+});
+
 // On-demand: (re)draft the lineup email for a night regardless of whether an
 // automatic one already exists — useful for backfilling nights that were
 // already full before this feature, or regenerating after a bio gets added.
@@ -514,7 +531,7 @@ adminRoutes.post("/drafts/:id/send", async (req, res) => {
   if (!mailerEnabled()) return res.status(503).json({ error: "Email sending isn't configured. Use Copy or Open in Mail." });
   const [row] = await q("SELECT * FROM drafts WHERE id = $1", [req.params.id]);
   if (!row) return res.status(404).json({ error: "Draft not found." });
-  const r = await sendEmail({ to: row.to_email, subject: row.subject, text: row.body });
+  const r = await sendEmail({ to: row.to_email, subject: row.subject, text: row.body, bcc: config.infoEmail });
   if (!r.ok) return res.status(502).json({ error: r.error || "Send failed." });
   await q("UPDATE drafts SET sent = TRUE WHERE id = $1", [req.params.id]);
   await audit(req.adminEmail, "draft.send", "draft", req.params.id, { to: row.to_email });
