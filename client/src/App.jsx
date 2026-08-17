@@ -669,11 +669,7 @@ function Header({ view, onSwitch }) {
    LAMPS
    ============================================================ */
 function sortEntries(entries) {
-  const orderOf = (e) => {
-    if (e.status === "confirmed" && e.slotTime) return SLOT_TIMES.indexOf(e.slotTime);
-    if (e.status === "confirmed") return 3;
-    return 4;
-  };
+  const orderOf = (e) => (e.slotTime ? SLOT_TIMES.indexOf(e.slotTime) : SLOT_TIMES.length);
   return [...entries].sort((a, b) => orderOf(a) - orderOf(b));
 }
 
@@ -2272,7 +2268,7 @@ function AdminCalendar({ ctx }) {
     return [...past, ...upcoming];
   })();
   const [adding, setAdding] = useState(null);
-  const [f, setF] = useState({ name: "", setType: "covers", status: "confirmed", slotTime: "" });
+  const [f, setF] = useState({ name: "", email: "", setType: "covers", status: "confirmed", slotTime: "" });
   const [removeArm, setRemoveArm] = useState(null); // "dateISO|idx"
   const [timesOpen, setTimesOpen] = useState(null); // dateISO
   const [calDrafts, setCalDrafts] = useState([]);
@@ -2314,9 +2310,9 @@ function AdminCalendar({ ctx }) {
   async function addManual() {
     if (!f.name.trim() || !adding) return;
     try {
-      await ctx.api.addManual(adding, { name: f.name.trim(), setType: f.setType, status: f.status, slotTime: f.slotTime || null });
+      await ctx.api.addManual(adding, { name: f.name.trim(), email: f.email.trim(), setType: f.setType, status: f.status, slotTime: f.slotTime || null });
       await ctx.refreshDesk();
-      setAdding(null); setF({ name: "", setType: "covers", status: "confirmed", slotTime: "" });
+      setAdding(null); setF({ name: "", email: "", setType: "covers", status: "confirmed", slotTime: "" });
       ctx.flash("Logged. The calendar updated for everyone.");
     } catch (e) { ctx.flash(e.message || "Could not log that entry."); }
   }
@@ -2382,26 +2378,50 @@ function AdminCalendar({ ctx }) {
                   }
                   setRemoveArm(null);
                 }
+                async function changeStatus(newStatus) {
+                  try {
+                    const res = await ctx.api.setManualStatus(dISO, e.manualIndex, newStatus);
+                    await ctx.refreshDesk();
+                    if (res.draft) {
+                      setCalDrafts((p) => [...p, { ...res.draft, key: `manual-${dISO}-${e.manualIndex}` }]);
+                      ctx.flash(`${e.name} marked confirmed. A confirmation email draft is ready below.`);
+                    } else if (newStatus === "confirmed") {
+                      ctx.flash(`${e.name} marked confirmed. No email on file, so no draft was made — add one via Remove + re-add if needed.`);
+                    } else {
+                      ctx.flash(`${e.name} marked ${newStatus}.`);
+                    }
+                  } catch (er) { ctx.flash(er.message || "Could not update status."); }
+                }
                 return (
                   <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
                     {!writers && <span style={{ color: e.slotTime ? T.amber : T.muted, fontFamily: "'Bebas Neue', sans-serif", letterSpacing: 1, fontSize: 13, minWidth: 34 }}>{e.slotTime || "—"}</span>}
                     <span style={{ color: T.cream }}>{e.name}</span>
                     <span style={{ color: e.status === "confirmed" ? T.green : T.amberDim, fontSize: 11.5 }}>{e.status}</span>
                     <span style={{ fontSize: 10.5, color: T.muted }}>{e.manual ? "manual" : "via app"}</span>
+                    {e.manual && e.status !== "confirmed" && (
+                      <button onClick={() => changeStatus("confirmed")} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px", borderColor: T.green, color: T.green }}>Mark confirmed</button>
+                    )}
+                    {e.manual && e.status === "tentative" && (
+                      <button onClick={() => changeStatus("pending")} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px" }}>Mark pending</button>
+                    )}
+                    {e.manual && e.status === "pending" && (
+                      <button onClick={() => changeStatus("tentative")} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px" }}>Mark tentative</button>
+                    )}
                     {canRemove && (
                       <button onClick={doRemove} onBlur={() => setRemoveArm(null)} onMouseDown={(ev) => { if (!isArmed) { ev.preventDefault(); setRemoveArm(armKey); } }} style={{
                         ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px", marginLeft: 2,
                         borderColor: isArmed ? T.red : T.line, color: isArmed ? T.red : T.muted,
-                      }}>{isArmed ? (e.manual ? "Remove?" : "Cancel set?") : (e.manual ? "Remove" : "Cancel")}</button>
+                      }}>{isArmed ? (e.manual ? "Remove?" : "Cancel set?") : (e.manual ? (e.status === "confirmed" ? "Remove" : "Remove (no email)") : "Cancel")}</button>
                     )}
                     {!canRemove && e.reqId && <span style={{ fontSize: 10.5, color: T.muted }}>· decide in Inbox</span>}
                   </div>
                 );
               })}
               {ctx.tentatives.filter((t) => t.dateISO === dISO).map((t) => (
-                <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                   <span style={{ color: T.amber }}>{ctx.artists[t.artistId]?.name || "Artist"}</span>
                   <span style={{ fontSize: 10.5, color: T.muted }}>· tentative{t.slotLabel ? `, ${t.slotLabel}` : ""} · reached out, not confirmed</span>
+                  <button onClick={async () => { try { await ctx.api.clearTentative(t.artistId, t.dateISO); await ctx.refreshDesk(); ctx.flash("Cleared."); } catch (er) { ctx.flash(er.message || "Could not clear."); } }} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px" }}>Clear</button>
                 </div>
               ))}
             </div>
@@ -2466,6 +2486,7 @@ function AdminCalendar({ ctx }) {
             {adding === dISO && (
               <div style={{ ...st.formGrid, marginTop: 10 }}>
                 <input placeholder="Artist name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={st.input} />
+                <input placeholder="Email (optional — needed to send a confirmation later)" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={st.input} />
                 <div style={{ display: "flex", gap: 8 }}>
                   <select value={f.setType} onChange={(e) => setF({ ...f, setType: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }}>
                     <option value="single-originals">Originals set</option>

@@ -68,6 +68,7 @@ export const api = {
   toggleClosed: (date) => req("POST", `/admin/nights/${date}/closed`),
   setWriters: (date, writersOverride) => req("POST", `/admin/nights/${date}/writers`, { writersOverride }),
   addManual: (date, payload) => req("POST", `/admin/nights/${date}/manual`, payload),
+  setManualStatus: (date, idx, status) => req("POST", `/admin/nights/${date}/manual/${idx}/status`, { status }),
   removeManual: (date, idx) => req("DELETE", `/admin/nights/${date}/manual/${idx}`),
   applyTimes: (date, changes) => req("POST", `/admin/nights/${date}/times`, { changes }),
   saveArtist: (id, fields) => req("PUT", `/admin/artists/${id}`, fields),

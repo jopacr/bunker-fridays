@@ -207,7 +207,7 @@ adminRoutes.post("/nights/:date/writers", async (req, res) => {
 
 adminRoutes.post("/nights/:date/manual", async (req, res) => {
   const date = req.params.date;
-  const { name, setType, status, slotTime } = req.body || {};
+  const { name, setType, status, slotTime, email } = req.body || {};
   if (!name?.trim()) return res.status(400).json({ error: "Name required." });
   const snap = await snapshot();
   if (slotTime && status === "confirmed" && takenSlots(snap, date).has(slotTime)) {
@@ -218,11 +218,42 @@ adminRoutes.post("/nights/:date/manual", async (req, res) => {
     setType: ["covers", "single-originals", "writers-round"].includes(setType) ? setType : "covers",
     status: ["confirmed", "pending", "tentative"].includes(status) ? status : "confirmed",
     slotTime: SLOT_TIMES.includes(slotTime) ? slotTime : null,
+    email: (email || "").trim() || null,
     source: "website inquiry",
   }];
   await upsertNight(date, { slots });
   await audit(req.adminEmail, "night.manual.add", "night", date, { name: name.trim() });
   res.json({ ok: true, slots });
+});
+
+// Change a manual entry's status in place — e.g. a tentative or pending
+// artist confirms outside the app, or a tentative one needs to be dropped.
+// Promoting to "confirmed" drafts the same confirmation email an app booking
+// would get, if an email is on file for that entry; otherwise it just updates
+// the status. No email fires when downgrading or when there's no address.
+adminRoutes.post("/nights/:date/manual/:idx/status", async (req, res) => {
+  const date = req.params.date;
+  const idx = parseInt(req.params.idx, 10);
+  const { status } = req.body || {};
+  if (!["confirmed", "pending", "tentative"].includes(status)) return res.status(400).json({ error: "Invalid status." });
+  const snap = await snapshot();
+  const cur = snap.nights[date]?.slots || [];
+  if (!(idx >= 0 && idx < cur.length)) return res.status(404).json({ error: "Entry not found." });
+  const target = cur[idx];
+  if (status === "confirmed" && target.slotTime) {
+    const collision = cur.some((s, i) => i !== idx && s.status === "confirmed" && s.slotTime === target.slotTime);
+    if (collision) return res.status(409).json({ error: `The ${target.slotTime} set is already confirmed for that night.` });
+  }
+  const slots = cur.map((s, i) => (i === idx ? { ...s, status } : s));
+  await upsertNight(date, { slots });
+  await audit(req.adminEmail, "night.manual.status", "night", date, { name: target.name, from: target.status, to: status });
+
+  let draft = null;
+  if (status === "confirmed" && target.email) {
+    const d = confirmEmailDraft({ name: target.name, date, slotTime: target.slotTime, setType: target.setType, email: target.email, recording: null }, null);
+    draft = await addDraft({ to: target.email, subject: d.subject, body: d.body, kind: "confirmation", label: `Confirmation · ${target.name} · ${fmtLong(date)}` });
+  }
+  res.json({ ok: true, slots, draft });
 });
 
 adminRoutes.delete("/nights/:date/manual/:idx", async (req, res) => {
