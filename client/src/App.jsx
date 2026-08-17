@@ -2474,14 +2474,14 @@ function AdminCalendar({ ctx }) {
                   </select>
                   <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }}>
                     <option value="confirmed">Confirmed</option>
-                    <option value="pending">Pending</option>
-                    <option value="tentative">Tentative (we/they reached out)</option>
+                    <option value="pending">Pending (they've asked, awaiting our decision)</option>
+                    <option value="tentative">Tentative (we've reached out, no commitment yet)</option>
                   </select>
                   <select value={f.slotTime} onChange={(e) => setF({ ...f, slotTime: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }}>
                     <option value="">No set time</option>
-                    <option value="8PM">8PM</option>
-                    <option value="9PM">9PM</option>
-                    <option value="10PM">10PM</option>
+                    {SLOT_TIMES.filter((t) => !entries.some((e) => e.status === "confirmed" && e.slotTime === t)).map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
                   </select>
                 </div>
                 <button onClick={addManual} style={st.amberBtn}>Add to night</button>
