@@ -10,13 +10,13 @@ import {
   upsertArtist, getArtist, deleteArtist, reassignArtistRefs, updateRequest, getRequest,
   upsertNight, addDraft, listDrafts, addPing,
   addRecPass, clearRecPasses, purgePastRecPasses, audit, q, uid,
-  setTentative, clearTentative, tentativesForDate, allTentatives,
+  setTentative, clearTentative, tentativesForDate, allTentatives, promoDraftForNight,
 } from "../services/store.js";
 import {
   planConfirmation, suggestFridays, takenSlots, nightScore, writersNight,
-  entriesFor, hasPlayed, isLocal, SLOT_TIMES, pendingInBlackoutWindow,
+  entriesFor, hasPlayed, isLocal, SLOT_TIMES, pendingInBlackoutWindow, nightConfirmedLineup,
 } from "../lib/rules.js";
-import { confirmEmailDraft, declineEmailDraft, timeChangeEmailDraft, removalEmailDraft, outreachEmailDraft, outreachShortText, tentativeReleaseEmailDraft } from "../lib/drafts.js";
+import { confirmEmailDraft, declineEmailDraft, timeChangeEmailDraft, removalEmailDraft, outreachEmailDraft, outreachShortText, tentativeReleaseEmailDraft, nightPromoEmailDraft, standardizeBio } from "../lib/drafts.js";
 import { runRecommendations } from "../lib/recommend.js";
 import { todayISO, fmtLong, fridaysAhead, iso } from "../lib/dates.js";
 import { sendEmail, mailerEnabled } from "../services/mailer.js";
@@ -28,6 +28,36 @@ export const adminRoutes = express.Router();
 adminRoutes.use(requireAdmin);
 
 const DECLINE_REASONS = ["slot-filled", "conflict", "not-now"];
+
+// Once a Friday is fully booked (3 confirmed sets), a lineup email is drafted
+// for the venue's promo contact — never sent automatically, just readied.
+const CANDACE_EMAIL = "mrscandacecrawford@gmail.com";
+
+async function buildAndSavePromoDraft(snap, date, lineup) {
+  const writers = writersNight(snap, date);
+  const resolved = lineup.map((a) => ({
+    name: a.name,
+    slotTime: a.slotTime,
+    setType: a.setType,
+    bio: standardizeBio(a.artist?.bio),
+    photoUrl: (a.artist?.photos || [])[0] || null,
+    links: a.artist?.links || null,
+  }));
+  const d = nightPromoEmailDraft(fmtLong(date), writers, resolved);
+  return addDraft({ to: CANDACE_EMAIL, subject: d.subject, body: d.body, kind: "promo", label: `Lineup ready · ${fmtLong(date)}`, nightDate: date });
+}
+
+// Called after any action that could bring a night to 3 confirmed sets.
+// Drafts the lineup email once per night — silently does nothing if the
+// night isn't full yet, or if a promo draft already exists for it.
+async function maybeAutoPromoDraft(date) {
+  const snap = await snapshot();
+  const lineup = nightConfirmedLineup(snap, date);
+  if (lineup.length !== 3) return null;
+  const existing = await promoDraftForNight(date);
+  if (existing) return null;
+  return buildAndSavePromoDraft(snap, date, lineup);
+}
 
 function publicSnap(snap) {
   return snap; // desk sees everything; shape matches the prototype's state
@@ -112,7 +142,8 @@ adminRoutes.post("/requests/:id/decide", async (req, res) => {
       }
     }
 
-    return res.json({ ok: true, autoDeclined: plan.autoDecline.length, draft });
+    const promoDraft = await maybeAutoPromoDraft(target.date);
+    return res.json({ ok: true, autoDeclined: plan.autoDecline.length, draft, promoDraft });
   }
 
   if (status === "declined") {
@@ -213,17 +244,19 @@ adminRoutes.post("/nights/:date/manual", async (req, res) => {
   if (slotTime && status === "confirmed" && takenSlots(snap, date).has(slotTime)) {
     return res.status(409).json({ error: `The ${slotTime} set is already confirmed for that night.` });
   }
+  const finalStatus = ["confirmed", "pending", "tentative"].includes(status) ? status : "confirmed";
   const slots = [...(snap.nights[date]?.slots || []), {
     name: name.trim(),
     setType: ["covers", "single-originals", "writers-round"].includes(setType) ? setType : "covers",
-    status: ["confirmed", "pending", "tentative"].includes(status) ? status : "confirmed",
+    status: finalStatus,
     slotTime: SLOT_TIMES.includes(slotTime) ? slotTime : null,
     email: (email || "").trim() || null,
     source: "website inquiry",
   }];
   await upsertNight(date, { slots });
   await audit(req.adminEmail, "night.manual.add", "night", date, { name: name.trim() });
-  res.json({ ok: true, slots });
+  const promoDraft = finalStatus === "confirmed" ? await maybeAutoPromoDraft(date) : null;
+  res.json({ ok: true, slots, promoDraft });
 });
 
 // Change a manual entry's status in place — e.g. a tentative or pending
@@ -253,7 +286,21 @@ adminRoutes.post("/nights/:date/manual/:idx/status", async (req, res) => {
     const d = confirmEmailDraft({ name: target.name, date, slotTime: target.slotTime, setType: target.setType, email: target.email, recording: null }, null);
     draft = await addDraft({ to: target.email, subject: d.subject, body: d.body, kind: "confirmation", label: `Confirmation · ${target.name} · ${fmtLong(date)}` });
   }
-  res.json({ ok: true, slots, draft });
+  const promoDraft = status === "confirmed" ? await maybeAutoPromoDraft(date) : null;
+  res.json({ ok: true, slots, draft, promoDraft });
+});
+
+// On-demand: (re)draft the lineup email for a night regardless of whether an
+// automatic one already exists — useful for backfilling nights that were
+// already full before this feature, or regenerating after a bio gets added.
+adminRoutes.post("/nights/:date/promo", async (req, res) => {
+  const date = req.params.date;
+  const snap = await snapshot();
+  const lineup = nightConfirmedLineup(snap, date);
+  if (!lineup.length) return res.status(400).json({ error: "No confirmed sets for that night yet." });
+  const draft = await buildAndSavePromoDraft(snap, date, lineup);
+  await audit(req.adminEmail, "night.promo.draft", "night", date, { count: lineup.length });
+  res.json({ ok: true, draft });
 });
 
 adminRoutes.delete("/nights/:date/manual/:idx", async (req, res) => {

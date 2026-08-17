@@ -5,9 +5,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   checkSubmission, planConfirmation, takenSlots, suggestFridays,
-  cooldownBlock, writersNight, artistUnavailableOn,
+  cooldownBlock, writersNight, artistUnavailableOn, nightConfirmedLineup,
 } from "../src/lib/rules.js";
 import { runRecommendations } from "../src/lib/recommend.js";
+import { standardizeBio, nightPromoEmailDraft } from "../src/lib/drafts.js";
 import { applyWorkbook } from "../src/lib/workbook.js";
 import { addDays, fridaysAhead } from "../src/lib/dates.js";
 
@@ -353,4 +354,62 @@ test("cooldownBlock also honors a manually-set last-played date (e.g. a Saturday
   assert.equal(cooldownBlock(s, "a1", "a1@x.com", addDays(F1, -7)), F1, "blocks symmetrically on the earlier side too");
   assert.equal(cooldownBlock(s, "a1", "a1@x.com", addDays(F1, 35)), null, "outside the window is fine");
   assert.equal(cooldownBlock(s, "a1", "a1@x.com", F1), null, "the same date (a second set that night) is not blocked");
+});
+
+/* ---------- fully-booked lineup email ---------- */
+
+test("nightConfirmedLineup only returns a full night once all 3 sets are confirmed, sorted by time", () => {
+  const a1 = artist("a1", { bio: "Loves reverb.", photos: ["https://x/1.jpg"], links: "https://a1.example" });
+  const a2 = artist("a2", { bio: "" });
+  const s = snap({
+    artists: { a1, a2 },
+    requests: [
+      reqOf("r1", "a1", F1, { status: "approved", slotTime: "9PM" }),
+      reqOf("r2", "a2", F1, { status: "pending", slotTime: "8PM" }), // not yet confirmed
+    ],
+    nights: { [F1]: { closed: false, slots: [{ name: "Manual Act", setType: "covers", status: "confirmed", slotTime: "8PM" }] } },
+  });
+  assert.equal(nightConfirmedLineup(s, F1).length, 2, "only 2 of 3 are actually confirmed so far");
+
+  const full = snap({
+    artists: { a1, a2 },
+    requests: [reqOf("r1", "a1", F1, { status: "approved", slotTime: "9PM" })],
+    nights: { [F1]: { closed: false, slots: [
+      { name: "Manual Act", setType: "covers", status: "confirmed", slotTime: "8PM" },
+      { name: "Third Act", setType: "covers", status: "confirmed", slotTime: "10PM" },
+    ] } },
+  });
+  const lineup = nightConfirmedLineup(full, F1);
+  assert.equal(lineup.length, 3);
+  assert.deepEqual(lineup.map((x) => x.slotTime), ["8PM", "9PM", "10PM"], "sorted by set time regardless of insertion order");
+  assert.equal(lineup[1].artist?.id, "a1", "the app-booked slot resolves its linked artist record");
+  assert.equal(lineup[0].artist, null, "a manual entry with no linked account has no artist record");
+});
+
+test("standardizeBio trims long bios at a sentence boundary and leaves short ones alone", () => {
+  assert.equal(standardizeBio(""), null);
+  assert.equal(standardizeBio(null), null);
+  assert.equal(standardizeBio("Short and sweet."), "Short and sweet.");
+  const long = "First sentence about the band. ".repeat(30);
+  const out = standardizeBio(long);
+  assert.ok(out.length <= 421, "trimmed to roughly the length cap");
+  assert.ok(out.trim().endsWith("."), "cuts at a sentence boundary rather than mid-word");
+});
+
+test("nightPromoEmailDraft flags missing bio/photo per artist and notes the EPK fallback once", () => {
+  const lineup = [
+    { name: "Full Info", slotTime: "8PM", setType: "covers", bio: "A great band.", photoUrl: "https://x/1.jpg", links: "https://x.example" },
+    { name: "No Bio", slotTime: "9PM", setType: "single-originals", bio: null, photoUrl: "https://x/2.jpg", links: null },
+    { name: "Nothing On File", slotTime: "10PM", setType: "covers", bio: null, photoUrl: null, links: null },
+  ];
+  const d = nightPromoEmailDraft("Friday, June 12, 2026", false, lineup);
+  assert.match(d.subject, /Friday, June 12, 2026/);
+  assert.match(d.body, /Hi Candace/);
+  assert.match(d.body, /Full Info — 8PM, covers set/);
+  assert.match(d.body, /Bio: A great band\./);
+  assert.match(d.body, /No Bio — 9PM, originals set/);
+  assert.match(d.body, /Bio: not on file\./);
+  assert.match(d.body, /may still be available directly from the artist/, "mentions the EPK/email fallback since something's missing");
+  const noneMissing = nightPromoEmailDraft("Friday, June 12, 2026", false, [lineup[0]]);
+  assert.ok(!noneMissing.body.includes("may still be available directly from the artist"), "fallback note omitted when nothing is missing");
 });

@@ -53,7 +53,7 @@ export function nightFromRow(r) {
 }
 
 export function draftFromRow(r) {
-  return { id: r.id, to: r.to_email, subject: r.subject, body: r.body, kind: r.kind, label: r.label, reqId: r.req_id || null, sent: !!r.sent, ts: r.ts };
+  return { id: r.id, to: r.to_email, subject: r.subject, body: r.body, kind: r.kind, label: r.label, reqId: r.req_id || null, nightDate: r.night_date || null, sent: !!r.sent, ts: r.ts };
 }
 
 /* ---------- snapshot ---------- */
@@ -211,11 +211,11 @@ export async function upsertNight(date, fields, run = q) {
 }
 
 /* ---------- drafts ---------- */
-export async function addDraft({ to, subject, body, kind, label, reqId }) {
+export async function addDraft({ to, subject, body, kind, label, reqId, nightDate }) {
   const id = uid();
   await q(
-    "INSERT INTO drafts (id, to_email, subject, body, kind, label, req_id) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-    [id, to || null, subject, body, kind, label || null, reqId || null]
+    "INSERT INTO drafts (id, to_email, subject, body, kind, label, req_id, night_date) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+    [id, to || null, subject, body, kind, label || null, reqId || null, nightDate || null]
   );
   // UI cap: archive everything past the 50 most recent (retained in DB)
   await q(`UPDATE drafts SET archived = TRUE WHERE archived = FALSE AND id NOT IN
@@ -226,6 +226,14 @@ export async function addDraft({ to, subject, body, kind, label, reqId }) {
 
 export async function listDrafts() {
   return (await q("SELECT * FROM drafts WHERE archived = FALSE ORDER BY ts DESC LIMIT 50")).map(draftFromRow);
+}
+
+// Most recent promo (lineup) draft for a given night, if any — including
+// archived ones, so we don't recreate a duplicate just because it aged out of
+// the capped drafts list.
+export async function promoDraftForNight(dateISO) {
+  const rows = await q("SELECT * FROM drafts WHERE kind = 'promo' AND night_date = $1 ORDER BY ts DESC LIMIT 1", [dateISO]);
+  return rows[0] ? draftFromRow(rows[0]) : null;
 }
 
 /* ---------- pings ---------- */

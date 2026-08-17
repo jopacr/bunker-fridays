@@ -711,14 +711,16 @@ function Lamps({ entries, writers, tentatives }) {
   });
   // Tentative holds (both a manually-entered tentative slot and the
   // "reached out" recommend-tab tracking) fill any remaining open slots,
-  // lowest priority — a real confirmed or pending entry always wins.
+  // lowest priority — a real confirmed or pending entry always wins. When two
+  // people are tentative for the SAME declared slot, they share that one dot
+  // rather than the second bumping into an unrelated, unrequested slot.
   entryTentative.forEach((e) => {
-    if (e.slotTime && !state[e.slotTime]) { state[e.slotTime] = "tentative"; return; }
+    if (e.slotTime) { if (!state[e.slotTime]) state[e.slotTime] = "tentative"; return; }
     const open = SLOT_TIMES.find((t) => !state[t]);
     if (open) state[open] = "tentative";
   });
   (tentatives || []).forEach((t) => {
-    if (t.slotLabel && SLOT_TIMES.includes(t.slotLabel) && !state[t.slotLabel]) { state[t.slotLabel] = "tentative"; return; }
+    if (t.slotLabel && SLOT_TIMES.includes(t.slotLabel)) { if (!state[t.slotLabel]) state[t.slotLabel] = "tentative"; return; }
     const open = SLOT_TIMES.find((s) => !state[s]);
     if (open) state[open] = "tentative";
   });
@@ -2357,6 +2359,37 @@ function AdminCalendar({ ctx }) {
                 <Lamps entries={entries} writers={writers} tentatives={ctx.tentatives.filter((t) => t.dateISO === dISO)} />
               </div>
             </div>
+            {(() => {
+              const confirmedCount = entries.filter((e) => e.status === "confirmed").length;
+              const promoDraft = ctx.drafts.find((dr) => dr.kind === "promo" && dr.nightDate === dISO);
+              if (promoDraft) {
+                return (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+                    <button onClick={async () => {
+                      try { await ctx.api.markDraftSent(promoDraft.id, !promoDraft.sent); await ctx.refreshDesk(); }
+                      catch (er) { ctx.flash(er.message || "Could not update."); }
+                    }} style={{ ...st.ghostBtn, fontSize: 11, padding: "3px 9px", borderColor: promoDraft.sent ? T.green : T.amber, color: promoDraft.sent ? T.green : T.amber }}>
+                      Lineup email to Candace: {promoDraft.sent ? "Sent ✓" : "Not sent"}
+                    </button>
+                  </div>
+                );
+              }
+              if (confirmedCount === 3) {
+                return (
+                  <div style={{ marginTop: 6 }}>
+                    <button onClick={async () => {
+                      try {
+                        const r = await ctx.api.draftNightPromo(dISO);
+                        await ctx.refreshDesk();
+                        ctx.flash("Lineup email drafted for Candace.");
+                        if (r.draft) setCalDrafts((p) => [...p, { ...r.draft, key: `promo-${dISO}` }]);
+                      } catch (er) { ctx.flash(er.message || "Could not draft the lineup email."); }
+                    }} style={{ ...st.ghostBtn, fontSize: 11, padding: "3px 9px" }}>Draft lineup email for Candace</button>
+                  </div>
+                );
+              }
+              return null;
+            })()}
             <div style={{ fontSize: 12.5, color: T.muted, marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
               {entries.length === 0 && !ctx.tentatives.some((t) => t.dateISO === dISO) ? "No entries" : sortEntries(entries).map((e, i) => {
                 const armKey = `${dISO}|${e.manual ? "m" + e.manualIndex : "r" + e.reqId}`;

@@ -3,6 +3,72 @@
 
 import { fmtLong } from "./dates.js";
 
+// Trims a bio to a consistent length for a promo email, cutting at a sentence
+// boundary where possible rather than mid-word.
+export function standardizeBio(bio) {
+  if (!bio) return null;
+  const text = String(bio).trim().replace(/\s+/g, " ");
+  if (!text) return null;
+  const MAX = 420;
+  if (text.length <= MAX) return text;
+  const slice = text.slice(0, MAX);
+  const lastEnd = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf("! "), slice.lastIndexOf("? "));
+  if (lastEnd > 200) return slice.slice(0, lastEnd + 1).trim();
+  return slice.trim() + "…";
+}
+
+const SET_TYPE_LABEL = { "single-originals": "originals set", "covers": "covers set", "writers-round": "Writers Round set" };
+
+// Lineup email to Candace once a Friday is fully booked (3 confirmed sets).
+// lineup: [{ name, slotTime, setType, bio, photoUrl, links }], already in
+// running order. Bios are pre-standardized by the caller via standardizeBio.
+export function nightPromoEmailDraft(dateLabel, writers, lineup) {
+  const format = writers
+    ? "Writers Round — Nashville-style round, Pay What You Can (suggested $15)"
+    : "Friday Night Session — tips-based showcase, three 45-minute sets";
+
+  const lines = [];
+  lines.push("Hi Candace,");
+  lines.push("");
+  lines.push(`${dateLabel} is fully booked at The Bunker. Format: ${format}.`);
+  lines.push("");
+  lines.push("Lineup:");
+
+  let anyMissing = false;
+  lineup.forEach((a, i) => {
+    lines.push("");
+    const slotBit = writers ? "" : a.slotTime ? ` — ${a.slotTime}` : "";
+    const styleBit = a.setType && SET_TYPE_LABEL[a.setType] ? `, ${SET_TYPE_LABEL[a.setType]}` : "";
+    lines.push(`${i + 1}. ${a.name}${slotBit}${styleBit}`);
+    if (a.bio) {
+      lines.push(`Bio: ${a.bio}`);
+    } else {
+      lines.push("Bio: not on file.");
+      anyMissing = true;
+    }
+    if (a.photoUrl) {
+      lines.push(`Photo: ${a.photoUrl}`);
+    } else {
+      lines.push("Photo: not on file.");
+      anyMissing = true;
+    }
+    if (a.links) {
+      lines.push(`Links: ${a.links}`);
+    }
+  });
+
+  lines.push("");
+  if (anyMissing) {
+    lines.push("Where a bio or photo is marked not on file, it may still be available directly from the artist by email or their EPK — happy to put you in touch if useful.");
+    lines.push("");
+  }
+  lines.push("Let me know if you need anything else to put the promo together.");
+  lines.push("");
+  lines.push("The Bunker Performance Lounge");
+
+  return { subject: `Lineup for ${dateLabel} — fully booked`, body: lines.join("\n") };
+}
+
 export function confirmEmailDraft(r, artist) {
   const writers = r.setType === "writers-round";
   const lines = [];

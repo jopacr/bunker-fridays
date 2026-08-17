@@ -46,6 +46,24 @@ export function entriesFor(snap, dateISO) {
   return { entries: [...manual, ...reqs], closed: !!ov.closed, note: ov.note || "" };
 }
 
+// The full lineup of confirmed sets for a date, with bio/photo/links resolved
+// from the linked artist record where one exists (app bookings), and null
+// where it doesn't (manual/website-inquiry entries without an account). Used
+// to build the fully-booked promo email to Candace.
+export function nightConfirmedLineup(snap, dateISO) {
+  const ov = snap.nights[dateISO] || {};
+  const fromManual = (ov.slots || [])
+    .filter((s) => s.status === "confirmed")
+    .map((s) => ({ name: s.name, setType: s.setType, slotTime: s.slotTime || null, artist: null }));
+  const fromRequests = snap.requests
+    .filter((r) => r.date === dateISO && r.status === "approved")
+    .map((r) => ({ name: r.name, setType: r.setType, slotTime: r.slotTime || null, artist: r.artistId ? snap.artists[r.artistId] || null : null }));
+  const lineup = [...fromManual, ...fromRequests];
+  const order = { "8PM": 0, "9PM": 1, "10PM": 2 };
+  lineup.sort((a, b) => (order[a.slotTime] ?? 9) - (order[b.slotTime] ?? 9));
+  return lineup;
+}
+
 export function takenSlots(snap, dateISO) {
   const { entries } = entriesFor(snap, dateISO);
   const s = new Set();
