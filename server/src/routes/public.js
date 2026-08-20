@@ -32,12 +32,14 @@ publicRoutes.get("/calendar", async (req, res) => {
   const nights = fridaysAhead(days).map((dISO) => {
     const { entries, closed } = entriesFor(snap, dISO);
     const writers = writersNight(snap, dISO);
+    // Public view: confirmed bookings only. Pending requests and tentative
+    // holds are internal booking-in-progress state, not for other artists to see.
+    const confirmedOnly = entries.filter((e) => e.status === "confirmed");
     return {
       dateISO: dISO, label: fmtLong(dISO), writers, closed,
-      // Public view: names + status only, no emails/notes
-      entries: entries.map((e) => ({ name: e.name, setType: e.setType, status: e.status, slotTime: e.slotTime || null, manual: !!e.manual })),
+      entries: confirmedOnly.map((e) => ({ name: e.name, setType: e.setType, status: e.status, slotTime: e.slotTime || null, manual: !!e.manual })),
       takenSlots: [...takenSlots(snap, dISO)],
-      originalsTaken: entries.filter((e) => e.status === "confirmed" && e.setType === "single-originals").length,
+      originalsTaken: confirmedOnly.filter((e) => e.setType === "single-originals").length,
     };
   });
   res.json({ today, nights });
