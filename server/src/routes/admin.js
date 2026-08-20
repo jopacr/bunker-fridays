@@ -602,12 +602,12 @@ adminRoutes.post("/recommend/outreach", async (req, res) => {
 // doesn't block other recommendations for the same date, and multiple artists
 // can be tentative at once while the venue juggles responses.
 adminRoutes.post("/recommend/tentative", async (req, res) => {
-  const { artistId, date, slotLabel, weeks } = req.body || {};
+  const { artistId, date, slotLabel, setType, weeks } = req.body || {};
   if (!artistId || !date) return res.status(400).json({ error: "artistId and date required." });
   const a = await getArtist(artistId);
   if (!a) return res.status(404).json({ error: "Artist not found." });
-  await setTentative(artistId, date, slotLabel || null);
-  await audit(req.adminEmail, "recommend.tentative.set", "artist", artistId, { date, slotLabel });
+  await setTentative(artistId, date, slotLabel || null, setType || null);
+  await audit(req.adminEmail, "recommend.tentative.set", "artist", artistId, { date, slotLabel, setType });
   const today = todayISO();
   const [snap, cfg] = await Promise.all([snapshot(), getRecConfig()]);
   res.json({
@@ -629,6 +629,42 @@ adminRoutes.delete("/recommend/tentative", async (req, res) => {
     tentatives: await tentativesForDate(date),
     nights: runRecommendations(snap, cfg, Math.min(Math.max(parseInt(weeks, 10) || 6, 1), 16), today),
   });
+});
+
+// Promote a tentative hold (from the Recommend tab) straight into a real
+// confirmed booking — same effect as adding a manual entry and marking it
+// confirmed, but pre-filled with the artist's own name/email since we already
+// have their account on file. Clears the tentative hold and drafts the
+// confirmation email the normal way.
+adminRoutes.post("/recommend/tentative/confirm", async (req, res) => {
+  const { artistId, date, slotTime, setType } = req.body || {};
+  if (!artistId || !date) return res.status(400).json({ error: "artistId and date required." });
+  const a = await getArtist(artistId);
+  if (!a) return res.status(404).json({ error: "Artist not found." });
+  const finalSetType = ["covers", "single-originals", "writers-round"].includes(setType) ? setType : "covers";
+  const snap = await snapshot();
+  if (slotTime && SLOT_TIMES.includes(slotTime) && takenSlots(snap, date).has(slotTime)) {
+    return res.status(409).json({ error: `The ${slotTime} set is already confirmed for that night.` });
+  }
+  const slots = [...(snap.nights[date]?.slots || []), {
+    name: a.name,
+    setType: finalSetType,
+    status: "confirmed",
+    slotTime: SLOT_TIMES.includes(slotTime) ? slotTime : null,
+    email: a.email || null,
+    source: "tentative-confirmed",
+  }];
+  await upsertNight(date, { slots });
+  await clearTentative(artistId, date);
+  await audit(req.adminEmail, "recommend.tentative.confirm", "artist", artistId, { date, slotTime, setType: finalSetType });
+
+  let draft = null;
+  if (a.email) {
+    const d = confirmEmailDraft({ name: a.name, date, slotTime: SLOT_TIMES.includes(slotTime) ? slotTime : null, setType: finalSetType, email: a.email, recording: null }, a);
+    draft = await addDraft({ to: a.email, subject: d.subject, body: d.body, kind: "confirmation", label: `Confirmation · ${a.name} · ${fmtLong(date)}` });
+  }
+  const promoDraft = await maybeAutoPromoDraft(date);
+  res.json({ ok: true, slots, draft, promoDraft });
 });
 
 adminRoutes.get("/recconfig", async (_req, res) => res.json(await getRecConfig()));

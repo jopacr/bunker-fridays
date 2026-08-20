@@ -251,12 +251,12 @@ export async function pingsFor(artistId) {
 /* ---------- tentative holds ---------- */
 // "I've reached out and they're tentative" per (artist, date). Purely
 // advisory — doesn't block other recommendations or requests for that date.
-export async function setTentative(artistId, dateISO, slotLabel) {
+export async function setTentative(artistId, dateISO, slotLabel, setType) {
   const id = uid();
   await q(
-    `INSERT INTO tentative_holds (id, artist_id, date_iso, slot_label) VALUES ($1,$2,$3,$4)
-     ON CONFLICT (artist_id, date_iso) DO UPDATE SET slot_label = $4`,
-    [id, artistId, dateISO, slotLabel || null]
+    `INSERT INTO tentative_holds (id, artist_id, date_iso, slot_label, set_type) VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (artist_id, date_iso) DO UPDATE SET slot_label = $4, set_type = COALESCE($5, tentative_holds.set_type)`,
+    [id, artistId, dateISO, slotLabel || null, setType || null]
   );
 }
 
@@ -266,12 +266,12 @@ export async function clearTentative(artistId, dateISO) {
 
 export async function tentativesForDate(dateISO) {
   return (await q("SELECT * FROM tentative_holds WHERE date_iso = $1", [dateISO]))
-    .map((r) => ({ id: r.id, artistId: r.artist_id, dateISO: r.date_iso, slotLabel: r.slot_label, created: r.created }));
+    .map((r) => ({ id: r.id, artistId: r.artist_id, dateISO: r.date_iso, slotLabel: r.slot_label, setType: r.set_type, created: r.created }));
 }
 
 export async function allTentatives() {
   return (await q("SELECT * FROM tentative_holds ORDER BY date_iso ASC", []))
-    .map((r) => ({ id: r.id, artistId: r.artist_id, dateISO: r.date_iso, slotLabel: r.slot_label, created: r.created }));
+    .map((r) => ({ id: r.id, artistId: r.artist_id, dateISO: r.date_iso, slotLabel: r.slot_label, setType: r.set_type, created: r.created }));
 }
 
 /* ---------- escalations ---------- */

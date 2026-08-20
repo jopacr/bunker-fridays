@@ -2400,10 +2400,22 @@ function AdminCalendar({ ctx }) {
               return null;
             })()}
             <div style={{ fontSize: 12.5, color: T.muted, marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
-              {entries.length === 0 && !ctx.tentatives.some((t) => t.dateISO === dISO) ? "No entries" : sortEntries(entries).map((e, i) => {
-                const armKey = `${dISO}|${e.manual ? "m" + e.manualIndex : "r" + e.reqId}`;
+              {(() => {
+                const holdEntries = ctx.tentatives.filter((t) => t.dateISO === dISO).map((t) => ({
+                  name: ctx.artists[t.artistId]?.name || "Artist",
+                  setType: t.setType || null,
+                  status: "tentative",
+                  slotTime: t.slotLabel && SLOT_TIMES.includes(t.slotLabel) ? t.slotLabel : null,
+                  isTentativeHold: true,
+                  artistId: t.artistId,
+                  holdId: t.id,
+                }));
+                const merged = [...entries, ...holdEntries];
+                if (!merged.length) return "No entries";
+                return sortEntries(merged).map((e, i) => {
+                const armKey = `${dISO}|${e.isTentativeHold ? "t" + e.holdId : e.manual ? "m" + e.manualIndex : "r" + e.reqId}`;
                 const isArmed = removeArm === armKey;
-                const canRemove = e.manual || (e.reqId && e.status === "confirmed");
+                const canRemove = !e.isTentativeHold && (e.manual || (e.reqId && e.status === "confirmed"));
                 async function doRemove() {
                   if (e.manual) { removeManual(dISO, e.manualIndex); }
                   else {
@@ -2441,26 +2453,61 @@ function AdminCalendar({ ctx }) {
                     ctx.flash(`${e.name} updated to ${SET_LABELS[newType] || newType}.`);
                   } catch (er) { ctx.flash(er.message || "Could not update set type."); }
                 }
-                const shortSetLabel = e.setType === "single-originals" ? "originals" : e.setType === "writers-round" ? "writers round" : "covers";
+                async function changeHoldSetType(newType) {
+                  try {
+                    await ctx.api.setTentative(e.artistId, dISO, e.slotTime, newType);
+                    await ctx.refreshDesk();
+                    ctx.flash(`${e.name} updated to ${SET_LABELS[newType] || newType}.`);
+                  } catch (er) { ctx.flash(er.message || "Could not update set type."); }
+                }
+                async function confirmHold() {
+                  try {
+                    const res = await ctx.api.confirmTentative(e.artistId, dISO, e.slotTime, e.setType || "covers");
+                    await ctx.refreshDesk();
+                    if (res.draft) {
+                      setCalDrafts((p) => [...p, { ...res.draft, key: `hold-${dISO}-${e.artistId}` }]);
+                      ctx.flash(`${e.name} confirmed. A confirmation email draft is ready below.`);
+                    } else {
+                      ctx.flash(`${e.name} confirmed. No email on file, so no draft was made.`);
+                    }
+                    if (res.promoDraft) setCalDrafts((p) => [...p, { ...res.promoDraft, key: `promo-${dISO}` }]);
+                  } catch (er) { ctx.flash(er.message || "Could not confirm."); }
+                }
+                async function clearHold() {
+                  try { await ctx.api.clearTentative(e.artistId, dISO); await ctx.refreshDesk(); ctx.flash("Cleared."); }
+                  catch (er) { ctx.flash(er.message || "Could not clear."); }
+                }
+                const shortSetLabel = e.setType === "single-originals" ? "originals" : e.setType === "writers-round" ? "writers round" : e.setType === "covers" ? "covers" : "style tbd";
                 return (
                   <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
                     {!writers && <span style={{ color: e.slotTime ? T.amber : T.muted, fontFamily: "'Bebas Neue', sans-serif", letterSpacing: 1, fontSize: 13, minWidth: 34 }}>{e.slotTime || "—"}</span>}
                     <span style={{ color: T.cream }}>{e.name}</span>
                     <span style={{ fontSize: 11, color: e.setType === "single-originals" ? T.amber : T.muted }}>{shortSetLabel}</span>
                     <span style={{ color: e.status === "confirmed" ? T.green : T.amberDim, fontSize: 11.5 }}>{e.status}</span>
-                    <span style={{ fontSize: 10.5, color: T.muted }}>{e.manual ? "manual" : "via app"}</span>
-                    {e.manual && !writers && (
+                    <span style={{ fontSize: 10.5, color: T.muted }}>{e.isTentativeHold ? "reached out" : e.manual ? "manual" : "via app"}</span>
+                    {e.isTentativeHold && !writers && (
+                      <button onClick={() => changeHoldSetType(e.setType === "single-originals" ? "covers" : "single-originals")} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px" }}>
+                        {e.setType === "single-originals" ? "Mark covers" : "Mark originals"}
+                      </button>
+                    )}
+                    {e.isTentativeHold && (
+                      <button onClick={confirmHold} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px", borderColor: T.green, color: T.green }}>Confirm</button>
+                    )}
+                    {e.isTentativeHold && (
+                      <button onClick={clearHold} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px" }}>Clear</button>
+                    )}
+                    {!e.isTentativeHold && e.manual && !writers && (
                       <button onClick={() => changeSetType(e.setType === "single-originals" ? "covers" : "single-originals")} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px" }}>
                         {e.setType === "single-originals" ? "Mark covers" : "Mark originals"}
                       </button>
                     )}
-                    {e.manual && e.status !== "confirmed" && (
+                    {!e.isTentativeHold && e.manual && e.status !== "confirmed" && (
                       <button onClick={() => changeStatus("confirmed")} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px", borderColor: T.green, color: T.green }}>Mark confirmed</button>
                     )}
-                    {e.manual && e.status === "tentative" && (
+                    {!e.isTentativeHold && e.manual && e.status === "tentative" && (
                       <button onClick={() => changeStatus("pending")} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px" }}>Mark pending</button>
                     )}
-                    {e.manual && e.status === "pending" && (
+                    {!e.isTentativeHold && e.manual && e.status === "pending" && (
                       <button onClick={() => changeStatus("tentative")} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px" }}>Mark tentative</button>
                     )}
                     {canRemove && (
@@ -2469,17 +2516,11 @@ function AdminCalendar({ ctx }) {
                         borderColor: isArmed ? T.red : T.line, color: isArmed ? T.red : T.muted,
                       }}>{isArmed ? (e.manual ? "Remove?" : "Cancel set?") : (e.manual ? (e.status === "confirmed" ? "Remove" : "Remove (no email)") : "Cancel")}</button>
                     )}
-                    {!canRemove && e.reqId && <span style={{ fontSize: 10.5, color: T.muted }}>· decide in Inbox</span>}
+                    {!canRemove && !e.isTentativeHold && e.reqId && <span style={{ fontSize: 10.5, color: T.muted }}>· decide in Inbox</span>}
                   </div>
                 );
-              })}
-              {ctx.tentatives.filter((t) => t.dateISO === dISO).map((t) => (
-                <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                  <span style={{ color: T.amber }}>{ctx.artists[t.artistId]?.name || "Artist"}</span>
-                  <span style={{ fontSize: 10.5, color: T.muted }}>· tentative{t.slotLabel ? `, ${t.slotLabel}` : ""} · reached out, not confirmed</span>
-                  <button onClick={async () => { try { await ctx.api.clearTentative(t.artistId, t.dateISO); await ctx.refreshDesk(); ctx.flash("Cleared."); } catch (er) { ctx.flash(er.message || "Could not clear."); } }} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px" }}>Clear</button>
-                </div>
-              ))}
+              });
+              })()}
             </div>
             {(removeDrafts[dISO] || []).length > 0 && (
               <div style={{ marginTop: 10 }}>
@@ -2620,9 +2661,10 @@ function AdminRecommend({ ctx }) {
 
   async function toggleTentative(pick, night, isTentative) {
     try {
+      const mappedType = pick.slot.type === "originals" ? "single-originals" : pick.slot.type === "covers" ? "covers" : (night.writers ? "writers-round" : null);
       const r = isTentative
         ? await ctx.api.clearTentative(pick.artistId, night.dateISO, weeks)
-        : await ctx.api.setTentative(pick.artistId, night.dateISO, pick.slot.label, weeks);
+        : await ctx.api.setTentative(pick.artistId, night.dateISO, pick.slot.label, mappedType, weeks);
       if (r.nights) setResults(r.nights);
       await ctx.refreshDesk();
     } catch (e) { ctx.flash(e.message || "Could not update tentative status."); }
