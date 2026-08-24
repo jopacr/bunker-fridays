@@ -84,7 +84,12 @@ function yesNoFlagOrPrev(cell, prevVal) {
   const s = String(cell ?? "").trim().toLowerCase();
   if (s === "yes") return "1";
   if (s === "no") return "0";
-  return prevVal ?? "0";
+  // Blank/ambiguous cell: keep whatever's already on file. For a brand-new
+  // artist with nothing on file yet, assume capable rather than silently
+  // excluding them from every recommendation — an incorrect "yes" is a quick
+  // fix on their card; an incorrect "no" makes them invisible with no signal
+  // anything is wrong.
+  return prevVal ?? "1";
 }
 function textOrPrev(cell, prevVal) {
   const s = cell == null ? "" : String(cell).trim();

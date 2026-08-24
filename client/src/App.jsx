@@ -825,7 +825,6 @@ function DatesPage({ ctx }) {
                           <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
                             {!writers && <span style={{ color: e.slotTime ? T.amber : T.muted, fontFamily: "'Bebas Neue', sans-serif", letterSpacing: 1, fontSize: 13, minWidth: 34 }}>{e.slotTime || "—"}</span>}
                             <span style={{ color: T.cream }}>{e.name}</span>
-                            <span style={{ color: e.status === "confirmed" ? T.green : T.amberDim, fontSize: 11.5 }}>{e.status}</span>
                           </div>
                         ))}
                   </div>

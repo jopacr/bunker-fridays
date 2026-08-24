@@ -282,6 +282,16 @@ test("suggestFridays offers up to 3 open Fridays filtered by set type", () => {
 const WB_HEADER_A = [["Name", "Status", "Local", "CanOriginals", "CanCovers", "Talent", "Draw", "", "LastPlayed", "Notes", "Unavail1", "Unavail2"]];
 const WB_HEADER_B = [["Date", "Slot", "Name", "", ""]];
 
+test("a brand-new artist with blank Can-Originals/Can-Covers columns is not silently locked out of both styles", () => {
+  const artistsRows = [...WB_HEADER_A,
+    ["Beckett Gloor", "Regular", "yes", "", "", 3, 3, "", "2026-05-01", "", "", ""],
+  ];
+  const out = applyWorkbook(snap(), { artists: artistsRows, bookings: [] }, TODAY);
+  const beckett = Object.values(out.artists).find((a) => a.name === "Beckett Gloor");
+  assert.equal(beckett.originalsSets, "1", "blank cell on a new artist assumes capable, not incapable");
+  assert.equal(beckett.coversSets, "1", "blank cell on a new artist assumes capable, not incapable");
+});
+
 test("importing the workbook twice produces no duplicates, double sets become two slots", () => {
   const artistsRows = [...WB_HEADER_A,
     ["Jo River", "Regular", "yes", "yes", "yes", 3, 2, "", "2026-01-09", "", "", ""],
