@@ -2798,6 +2798,15 @@ function AdminArtists({ ctx }) {
   const [editF, setEditF] = useState({});
   const [delArm, setDelArm] = useState(null);
   const [mergeId, setMergeId] = useState(null); // artist being merged away
+  const [reviewOnly, setReviewOnly] = useState(false);
+
+  // Mirrors the recommendation engine's own canO/canC check exactly, so this
+  // flag always matches what's actually keeping someone out of recommendations.
+  function needsSetTypeReview(a) {
+    const noO = String(a.originalsSets ?? "").trim() === "0";
+    const noC = String(a.coversSets ?? "").trim() === "0";
+    return noO && noC;
+  }
   const [mergeArm, setMergeArm] = useState(null); // keeper id armed for confirm
 
   async function submitImport(file, confirm) {
@@ -2870,7 +2879,9 @@ function AdminArtists({ ctx }) {
 
   const list = Object.values(ctx.artists)
     .filter((a) => (a.name + " " + (a.city || "") + " " + (a.email || "") + " " + (a.genre || "")).toLowerCase().includes(q.toLowerCase()))
+    .filter((a) => !reviewOnly || needsSetTypeReview(a))
     .sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
+  const reviewCount = Object.values(ctx.artists).filter(needsSetTypeReview).length;
 
   async function addArtist() {
     if (!f.name.trim()) return;
@@ -2939,6 +2950,11 @@ function AdminArtists({ ctx }) {
         </div>
       )}
       <div style={{ fontSize: 12.5, color: T.muted }}>{list.length} artist{list.length === 1 ? "" : "s"}. Records build automatically from app requests; add website-inquiry artists manually. Draw and Talent scores and notes are venue-only, and they'll feed the future recommendation logic.</div>
+      {reviewCount > 0 && (
+        <button onClick={() => setReviewOnly((v) => !v)} style={{ ...st.ghostBtn, alignSelf: "flex-start", borderColor: T.red, color: T.red, fontSize: 12.5 }}>
+          {reviewOnly ? "Showing: needs review — tap to show all" : `⚠ ${reviewCount} artist${reviewCount === 1 ? "" : "s"} can't play either style — tap to review`}
+        </button>
+      )}
       {mergeId && (
         <div style={{ ...st.card, borderLeft: `3px solid ${T.amber}`, position: "sticky", top: 8, zIndex: 5 }}>
           <div style={{ fontSize: 13.5, color: T.amber, fontWeight: 700 }}>Merging "{ctx.artists[mergeId]?.name}" into another record</div>
@@ -2999,6 +3015,7 @@ function AdminArtists({ ctx }) {
                   {artistIsLocal(a) && <span style={{ ...st.badge, marginLeft: 6, borderColor: T.green, color: T.green }}>LOCAL</span>}
                   {a.bookingPref === "rotation" && <span style={{ ...st.badge, marginLeft: 6, borderColor: T.green, color: T.green }}>REGULAR</span>}
                   {a.bookingPref === "single" && <span style={{ ...st.badge, marginLeft: 6, borderColor: T.muted, color: T.muted }}>SINGLE</span>}
+                  {needsSetTypeReview(a) && <span style={{ ...st.badge, marginLeft: 6, borderColor: T.red, color: T.red }}>⚠ CAN'T PLAY EITHER STYLE</span>}
                 </div>
                 <div style={{ fontSize: 12.5, color: T.muted }}>{[a.genre, a.city, a.email, a.phone].filter(Boolean).join(" · ")}</div>
                 {a.etransferEmail && a.etransferEmail !== a.email && <div style={{ fontSize: 12, color: T.cream }}>E-transfer: {a.etransferEmail}</div>}
@@ -3066,6 +3083,7 @@ function AdminArtists({ ctx }) {
                         <input placeholder="# original sets" value={editF.originalsSets} onChange={(e) => setEditF({ ...editF, originalsSets: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }} />
                         <input placeholder="# cover sets" value={editF.coversSets} onChange={(e) => setEditF({ ...editF, coversSets: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }} />
                       </div>
+                      <div style={{ fontSize: 11, color: T.muted, marginTop: -4 }}>0 means they can't do that style at all — leave blank rather than 0 if you're not sure, so they still show up in recommendations.</div>
                       <div style={{ display: "flex", gap: 8 }}>
                         <input placeholder="Instagram" value={editF.instagram} onChange={(e) => setEditF({ ...editF, instagram: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }} />
                         <input placeholder="Facebook" value={editF.facebook} onChange={(e) => setEditF({ ...editF, facebook: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }} />
