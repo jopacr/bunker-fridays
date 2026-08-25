@@ -58,11 +58,12 @@ export function draftFromRow(r) {
 
 /* ---------- snapshot ---------- */
 export async function snapshot() {
-  const [artistRows, requestRows, nightRows, passRows, tentativeRows, kbRow] = await Promise.all([
+  const [artistRows, requestRows, nightRows, passRows, softPassRows, tentativeRows, kbRow] = await Promise.all([
     q("SELECT * FROM artists"),
     q("SELECT * FROM requests ORDER BY ts DESC"),
     q("SELECT * FROM nights"),
     q("SELECT * FROM rec_passes"),
+    q("SELECT * FROM soft_passes"),
     q("SELECT * FROM tentative_holds"),
     q("SELECT * FROM venue_kb WHERE id = 1"),
   ]);
@@ -72,6 +73,8 @@ export async function snapshot() {
   nightRows.forEach((r) => { nights[r.date] = nightFromRow(r); });
   const recPasses = {};
   passRows.forEach((r) => { recPasses[`${r.artist_id}|${r.date}`] = r.ts; });
+  const softPasses = {};
+  softPassRows.forEach((r) => { softPasses[`${r.artist_id}|${r.date}`] = r.ts; });
   const tentatives = {};
   tentativeRows.forEach((r) => { tentatives[`${r.artist_id}|${r.date_iso}`] = r.slot_label || true; });
   return {
@@ -79,6 +82,7 @@ export async function snapshot() {
     requests: requestRows.map(requestFromRow),
     nights,
     recPasses,
+    softPasses,
     tentatives,
     localCities: kbRow[0]?.local_cities || null,
   };
@@ -287,9 +291,19 @@ export async function addRecPass(artistId, date) {
 }
 export async function clearRecPasses(artistId) {
   await q("DELETE FROM rec_passes WHERE artist_id = $1", [artistId]);
+  await q("DELETE FROM soft_passes WHERE artist_id = $1", [artistId]);
 }
 export async function purgePastRecPasses(today) {
   await q("DELETE FROM rec_passes WHERE date < $1", [today]); // auto-purge once the date passes
+  await q("DELETE FROM soft_passes WHERE date < $1", [today]);
+}
+
+/* ---------- soft passes: deprioritize without excluding ---------- */
+export async function addSoftPass(artistId, date) {
+  await q("INSERT INTO soft_passes (artist_id, date) VALUES ($1,$2) ON CONFLICT DO NOTHING", [artistId, date]);
+}
+export async function clearSoftPass(artistId, date) {
+  await q("DELETE FROM soft_passes WHERE artist_id = $1 AND date = $2", [artistId, date]);
 }
 
 /* ---------- audit ---------- */

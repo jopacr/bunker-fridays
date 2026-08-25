@@ -2630,6 +2630,21 @@ function AdminRecommend({ ctx }) {
   const [weeks, setWeeks] = useState(8);
   const [results, setResults] = useState(null);
   const [outreach, setOutreach] = useState(null); // {key, to, subject, body, kind:"follow-up"}
+  const [whyOpenFor, setWhyOpenFor] = useState(null); // dateISO of the night whose "why" box is open
+  const [whyQuery, setWhyQuery] = useState("");
+  const [whyResult, setWhyResult] = useState(null);
+  const [whyBusy, setWhyBusy] = useState(false);
+
+  async function checkWhy(dateISO) {
+    const match = Object.values(ctx.artists).find((a) => (a.name || "").toLowerCase() === whyQuery.trim().toLowerCase());
+    if (!match) { ctx.flash("Type an artist name exactly as it appears on their card."); return; }
+    setWhyBusy(true);
+    try {
+      const r = await ctx.api.whyNotEligible(match.id, dateISO);
+      setWhyResult(r);
+    } catch (e) { ctx.flash(e.message || "Could not check that artist."); }
+    setWhyBusy(false);
+  }
 
   function upCfg(k, v) { setCfg((p) => ({ ...p, [k]: Number(v) || 0 })); }
 
@@ -2647,8 +2662,17 @@ function AdminRecommend({ ctx }) {
       const r = await ctx.api.passRecommend({ artistId: pick.artistId, name: pick.name, date: night.dateISO, weeks });
       setResults(r.nights || []);
       await ctx.refreshDesk();
-      ctx.flash(`Passed on ${pick.name} for that date. They won't be recommended for it again (clears from their profile, or automatically once the date passes).`);
+      ctx.flash(`Hard-passed on ${pick.name} for that date. They're fully excluded from it (clear from their profile, or automatically once the date passes).`);
     } catch (e) { ctx.flash(e.message || "Could not pass."); }
+  }
+
+  async function softPassOn(pick, night) {
+    try {
+      const r = await ctx.api.softPassRecommend({ artistId: pick.artistId, name: pick.name, date: night.dateISO, weeks });
+      setResults(r.nights || []);
+      await ctx.refreshDesk();
+      ctx.flash(`Soft-passed on ${pick.name} — pushed to the back of the line for that date, not excluded. They'll come back up only if no one else is eligible.`);
+    } catch (e) { ctx.flash(e.message || "Could not soft-pass."); }
   }
 
   async function ping(pick, night) {
@@ -2730,6 +2754,8 @@ function AdminRecommend({ ctx }) {
                       {p.name || "No eligible artists"}
                       {p.name && p.isNew && <span style={{ ...st.badge, marginLeft: 6, borderColor: T.amber, color: T.amber }}>NEW</span>}
                       {p.name && p.local && <span style={{ ...st.badge, marginLeft: 6, borderColor: T.green, color: T.green }}>LOCAL</span>}
+                      {p.name && p.unclearSetType && <span style={{ ...st.badge, marginLeft: 6, borderColor: T.muted, color: T.muted }} title="Set-type field is blank — not confirmed either way">STYLE UNCONFIRMED</span>}
+                      {p.name && p.softPassed && <span style={{ ...st.badge, marginLeft: 6, borderColor: T.red, color: T.red }} title="Everyone else was ruled out — this is a soft-passed last resort">LAST RESORT</span>}
                     </div>
                     {p.name && <div style={{ fontSize: 11.5, color: T.muted }}>score {p.score}</div>}
                   </div>
@@ -2753,7 +2779,8 @@ function AdminRecommend({ ctx }) {
                       <button onClick={() => toggleTentative(p, night, isTentative)} style={{ ...st.ghostBtn, fontSize: 12, padding: "6px 12px", borderColor: T.amber, color: T.amber, background: isTentative ? "rgba(212,163,79,0.12)" : "transparent" }}>
                         {isTentative ? "Tentative ✓" : "Mark tentative"}
                       </button>
-                      <button onClick={() => passOn(p, night)} style={{ ...st.ghostBtn, fontSize: 12, padding: "6px 12px", borderColor: T.red, color: T.red }}>Pass</button>
+                      <button onClick={() => softPassOn(p, night)} style={{ ...st.ghostBtn, fontSize: 12, padding: "6px 12px" }} title="Push to the back of the line for this date; still comes up if nobody else is eligible">Soft pass</button>
+                      <button onClick={() => passOn(p, night)} style={{ ...st.ghostBtn, fontSize: 12, padding: "6px 12px", borderColor: T.red, color: T.red }} title="Fully exclude for this date">Hard pass</button>
                     </div>
                     );
                   })()}
@@ -2764,6 +2791,38 @@ function AdminRecommend({ ctx }) {
               </div>
             );
           })}
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.line}` }}>
+            {whyOpenFor === night.dateISO ? (
+              <div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <input placeholder="Artist name" value={whyQuery} onChange={(e) => setWhyQuery(e.target.value)} style={{ ...st.input, flex: 1, minWidth: 140 }} />
+                  <button onClick={() => checkWhy(night.dateISO)} disabled={whyBusy} style={{ ...st.ghostBtn, opacity: whyBusy ? 0.6 : 1 }}>{whyBusy ? "Checking..." : "Check"}</button>
+                  <button onClick={() => { setWhyOpenFor(null); setWhyResult(null); setWhyQuery(""); }} style={st.ghostBtn}>Close</button>
+                </div>
+                {whyResult && (
+                  <div style={{ marginTop: 8, fontSize: 12.5, color: T.cream }}>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                      {whyResult.name}: {whyResult.eligibleForDate ? "eligible for this date" : "not eligible for this date"}
+                    </div>
+                    {whyResult.blockedReasons?.map((r, i) => (
+                      <div key={i} style={{ color: T.red, marginBottom: 2 }}>· {r.message}</div>
+                    ))}
+                    {whyResult.notes?.map((r, i) => (
+                      <div key={i} style={{ color: T.muted, marginBottom: 2 }}>· {r.message}</div>
+                    ))}
+                    {whyResult.styleNotes?.map((m, i) => (
+                      <div key={i} style={{ color: T.amberDim, marginBottom: 2 }}>· {m}</div>
+                    ))}
+                    {whyResult.eligibleForDate && !whyResult.styleNotes?.length && (
+                      <div style={{ color: T.muted }}>· No blocks. If they're not the top pick shown above, another eligible artist simply scored higher for that slot.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button onClick={() => { setWhyOpenFor(night.dateISO); setWhyResult(null); setWhyQuery(""); }} style={{ ...st.ghostBtn, fontSize: 12 }}>Why isn't someone showing up?</button>
+            )}
+          </div>
         </div>
       ))}
     </div>
@@ -2857,6 +2916,7 @@ function AdminArtists({ ctx }) {
       originalsSets: a.originalsSets ?? "", coversSets: a.coversSets ?? "",
       etransferEmail: a.etransferEmail || "", local: !!a.local,
       importedLastPlayed: a.importedLastPlayed || "",
+      bookingPref: a.bookingPref || "rotation",
     });
     setDelArm(null);
   }
@@ -3066,6 +3126,14 @@ function AdminArtists({ ctx }) {
                         <input type="checkbox" checked={!!editF.local} onChange={(e) => setEditF({ ...editF, local: e.target.checked })} />
                         Local (within ~20 min of Stratford)
                       </label>
+                      <div>
+                        <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>Booking status</div>
+                        <select value={editF.bookingPref || "rotation"} onChange={(e) => setEditF({ ...editF, bookingPref: e.target.value })} style={st.input}>
+                          <option value="rotation">Regular rotation — included in recommendations</option>
+                          <option value="single">Single set / paused — not recommended (they're taking a break, etc.)</option>
+                        </select>
+                        <div style={{ fontSize: 11, color: T.muted, marginTop: 3 }}>Switch to "Single set / paused" to pull them out of recommendations without deleting their record — switch back anytime.</div>
+                      </div>
                       <div>
                         <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>Last date played (covers Saturday/other shows, or the booking doc during the transition)</div>
                         <input type="date" value={editF.importedLastPlayed} onChange={(e) => setEditF({ ...editF, importedLastPlayed: e.target.value })} style={st.input} />

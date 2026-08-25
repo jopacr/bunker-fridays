@@ -7,7 +7,7 @@ import {
   checkSubmission, planConfirmation, takenSlots, suggestFridays,
   cooldownBlock, writersNight, artistUnavailableOn, nightConfirmedLineup,
 } from "../src/lib/rules.js";
-import { runRecommendations } from "../src/lib/recommend.js";
+import { runRecommendations, explainEligibility } from "../src/lib/recommend.js";
 import { standardizeBio, nightPromoEmailDraft } from "../src/lib/drafts.js";
 import { applyWorkbook } from "../src/lib/workbook.js";
 import { addDays, fridaysAhead } from "../src/lib/dates.js";
@@ -16,8 +16,8 @@ const TODAY = "2026-06-12"; // a Friday
 const fridays = fridaysAhead(120, new Date("2026-06-12T12:00:00-04:00"));
 const [F1, F2, F3, F4, F5, F6] = fridays;
 
-function snap({ artists = {}, requests = [], nights = {}, recPasses = {}, tentatives = {} } = {}) {
-  return { artists, requests, nights, recPasses, tentatives, localCities: null };
+function snap({ artists = {}, requests = [], nights = {}, recPasses = {}, softPasses = {}, tentatives = {} } = {}) {
+  return { artists, requests, nights, recPasses, softPasses, tentatives, localCities: null };
 }
 
 const artist = (id, over = {}) => ({
@@ -190,6 +190,84 @@ test("recommender skips single-preference artists and passed picks; pass refills
   names = nights[0].picks.map((p) => p.name).filter(Boolean);
   assert.ok(!names.includes("Artist a1"));
   assert.equal(names[0], "Artist a2");
+});
+
+test("a soft pass deprioritizes an artist but still recommends them if no one else is eligible", () => {
+  // Only a1 is eligible at all for this date (a2 is single-preference).
+  const s = snap({
+    artists: {
+      a1: artist("a1", { talentScore: 3, drawScore: 3 }),
+      a2: artist("a2", { talentScore: 5, drawScore: 5, bookingPref: "single" }),
+    },
+  });
+  const strict = runRecommendations(s, CFG, 1, TODAY);
+  assert.equal(strict[0].picks[0].name, "Artist a1", "sanity: a1 is the only real candidate");
+
+  const soft = snap({ ...s, softPasses: { [`a1|${strict[0].dateISO}`]: Date.now() } });
+  soft.artists = s.artists; soft.requests = s.requests; soft.nights = s.nights;
+  const withSoft = runRecommendations(soft, CFG, 1, TODAY);
+  assert.equal(withSoft[0].picks[0].name, "Artist a1", "soft-passed artist is still picked as a last resort when nobody else qualifies");
+  assert.equal(withSoft[0].picks[0].softPassed, true, "the pick is flagged as coming from the soft-pass fallback");
+});
+
+test("a soft pass loses out to any other otherwise-eligible artist", () => {
+  const s = snap({
+    artists: {
+      a1: artist("a1", { talentScore: 1, drawScore: 1 }),
+      a2: artist("a2", { talentScore: 1, drawScore: 1 }),
+    },
+  });
+  const target = runRecommendations(s, CFG, 1, TODAY)[0].dateISO;
+  const soft = snap({ ...s, softPasses: { [`a1|${target}`]: Date.now() } });
+  soft.artists = s.artists; soft.requests = s.requests; soft.nights = s.nights;
+  const picks = runRecommendations(soft, CFG, 1, TODAY)[0].picks;
+  assert.equal(picks[0].name, "Artist a2", "a2 is chosen ahead of the soft-passed a1");
+  assert.ok(!picks[0].softPassed);
+});
+
+test("a blank (unclear) set-type field is only offered after every clear-capability artist is exhausted", () => {
+  // a1 has originals left blank (unclear); a2 explicitly can do originals.
+  const s = snap({
+    artists: {
+      a1: artist("a1", { talentScore: 5, drawScore: 5, originalsSets: "", coversSets: "0" }),
+      a2: artist("a2", { talentScore: 1, drawScore: 1, originalsSets: "1", coversSets: "0" }),
+    },
+  });
+  const target = runRecommendations(s, CFG, 1, TODAY)[0].dateISO;
+  // Force an originals slot by using a Writers Round-style single-artist test instead:
+  // simplest is to check via explainEligibility's style notes plus a direct pick check
+  // on a night where only an originals slot is open.
+  const nights = runRecommendations(s, CFG, 1, TODAY);
+  const originalsPick = nights[0].picks.find((p) => p.slot.type === "originals");
+  assert.equal(originalsPick.name, "Artist a2", "clear-capability a2 is preferred over unclear a1 despite lower score");
+});
+
+test("an unclear-capability artist is still recommended once no clear-capability candidate exists", () => {
+  const s = snap({
+    artists: {
+      a1: artist("a1", { talentScore: 5, drawScore: 5, originalsSets: "", coversSets: "0" }),
+    },
+  });
+  const nights = runRecommendations(s, CFG, 1, TODAY);
+  const originalsPick = nights[0].picks.find((p) => p.slot.type === "originals");
+  assert.equal(originalsPick.name, "Artist a1", "the only candidate, even with unclear originals capability, still gets recommended");
+  assert.equal(originalsPick.unclearSetType, true, "flagged so the venue knows this is an unconfirmed capability");
+});
+
+test("explainEligibility reports the real blocking reason for a specific date", () => {
+  const s = snap({
+    artists: { a1: artist("a1", { importedLastPlayed: "2026-05-01" }) },
+  });
+  const nearby = "2026-05-20"; // 19 days after last played, well inside a 120-day window
+  const result = explainEligibility(s, CFG, "a1", nearby);
+  assert.equal(result.found, true);
+  assert.equal(result.eligibleForDate, false);
+  assert.equal(result.blockedReasons[0].code, "spacing");
+  assert.ok(result.blockedReasons[0].message.includes("120-day"));
+
+  const farAway = "2027-01-01";
+  const clear = explainEligibility(s, CFG, "a1", farAway);
+  assert.equal(clear.eligibleForDate, true);
 });
 
 test("marking an artist tentative for a date surfaces the next-best pick, without excluding them from other dates", () => {

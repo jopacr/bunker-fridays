@@ -9,7 +9,7 @@ import {
   snapshot, getRecConfig, setRecConfig, getKb, setKb,
   upsertArtist, getArtist, deleteArtist, reassignArtistRefs, updateRequest, getRequest,
   upsertNight, addDraft, listDrafts, addPing,
-  addRecPass, clearRecPasses, purgePastRecPasses, audit, q, uid,
+  addRecPass, clearRecPasses, purgePastRecPasses, addSoftPass, clearSoftPass, audit, q, uid,
   setTentative, clearTentative, tentativesForDate, allTentatives, promoDraftForNight,
 } from "../services/store.js";
 import {
@@ -17,7 +17,7 @@ import {
   entriesFor, hasPlayed, isLocal, SLOT_TIMES, pendingInBlackoutWindow, nightConfirmedLineup,
 } from "../lib/rules.js";
 import { confirmEmailDraft, declineEmailDraft, timeChangeEmailDraft, removalEmailDraft, outreachEmailDraft, outreachShortText, tentativeReleaseEmailDraft, nightPromoEmailDraft, standardizeBio } from "../lib/drafts.js";
-import { runRecommendations } from "../lib/recommend.js";
+import { runRecommendations, explainEligibility } from "../lib/recommend.js";
 import { todayISO, fmtLong, fridaysAhead, iso } from "../lib/dates.js";
 import { sendEmail, mailerEnabled } from "../services/mailer.js";
 import { config } from "../config.js";
@@ -557,11 +557,53 @@ adminRoutes.post("/recommend/pass", async (req, res) => {
   }
   if (!aid) return res.status(404).json({ error: "Artist not found." });
   await addRecPass(aid, date);
+  await clearSoftPass(aid, date); // a hard pass supersedes any existing soft pass
   await audit(req.adminEmail, "recommend.pass", "artist", aid, { date });
   // Re-run so the slot refills immediately with the next-best pick.
   const today = todayISO();
   const [snap, cfg] = await Promise.all([snapshot(), getRecConfig()]);
   res.json({ ok: true, nights: runRecommendations(snap, cfg, Math.min(Math.max(parseInt(weeks, 10) || 6, 1), 16), today) });
+});
+
+// Soft pass: push this artist to the back of the line for this date rather
+// than excluding them outright. They're only offered again if every other
+// otherwise-eligible artist (including the blank-set-type last resort tier)
+// has already been exhausted for the slot.
+adminRoutes.post("/recommend/soft-pass", async (req, res) => {
+  const { artistId, name, date, weeks } = req.body || {};
+  if (!date) return res.status(400).json({ error: "date required." });
+  let aid = artistId;
+  if (!aid && name) {
+    const [row] = await q("SELECT id FROM artists WHERE lower(name) = lower($1)", [name]);
+    aid = row?.id;
+  }
+  if (!aid) return res.status(404).json({ error: "Artist not found." });
+  await addSoftPass(aid, date);
+  await audit(req.adminEmail, "recommend.softpass", "artist", aid, { date });
+  const today = todayISO();
+  const [snap, cfg] = await Promise.all([snapshot(), getRecConfig()]);
+  res.json({ ok: true, nights: runRecommendations(snap, cfg, Math.min(Math.max(parseInt(weeks, 10) || 6, 1), 16), today) });
+});
+
+adminRoutes.delete("/recommend/soft-pass", async (req, res) => {
+  const { artistId, date, weeks } = req.body || {};
+  if (!artistId || !date) return res.status(400).json({ error: "artistId and date required." });
+  await clearSoftPass(artistId, date);
+  await audit(req.adminEmail, "recommend.softpass.clear", "artist", artistId, { date });
+  const today = todayISO();
+  const [snap, cfg] = await Promise.all([snapshot(), getRecConfig()]);
+  res.json({ ok: true, nights: runRecommendations(snap, cfg, Math.min(Math.max(parseInt(weeks, 10) || 6, 1), 16), today) });
+});
+
+// Diagnostic: "why isn't this artist showing up for this date?" Surfaces the
+// exact same checks the recommendation engine itself uses.
+adminRoutes.get("/recommend/why", async (req, res) => {
+  const { artistId, date } = req.query || {};
+  if (!artistId || !date) return res.status(400).json({ error: "artistId and date required." });
+  const [snap, cfg] = await Promise.all([snapshot(), getRecConfig()]);
+  const result = explainEligibility(snap, cfg, artistId, date);
+  if (!result.found) return res.status(404).json({ error: "Artist not found." });
+  res.json(result);
 });
 
 // Accepting a pick only drafts outreach; nothing books until the artist responds.
