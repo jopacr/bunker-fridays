@@ -17,6 +17,7 @@ import { CORE_FACTS, INFO_EMAIL } from "../lib/knowledge.js";
 import { chat } from "../services/chatbot.js";
 import { requireArtist } from "../auth/sessions.js";
 import { pushToVenue } from "../services/push.js";
+import { sendEmail, mailerEnabled } from "../services/mailer.js";
 import { publicArtist } from "../auth/artistAuth.js";
 import { r2Enabled, presignPhotoUpload } from "../services/r2.js";
 import { pushEnabled, publicKey } from "../services/push.js";
@@ -126,8 +127,26 @@ publicRoutes.post("/me/requests/:id/cancel", requireArtist, async (req, res) => 
   if (!((r.status === "pending" || r.status === "approved") && r.date >= today)) {
     return res.status(409).json({ error: "That request can't be cancelled." });
   }
+  const wasConfirmed = r.status === "approved";
   await updateRequest(r.id, { status: "cancelled", cancelledBy: "artist" });
   await audit(`artist:${req.artistId}`, "request.cancelled", "request", r.id);
+
+  // Let the venue know right away, especially if this was a confirmed set —
+  // that's a slot that just opened back up unexpectedly.
+  const dateLabel = fmtLong(r.date);
+  pushToVenue({
+    title: wasConfirmed ? "A confirmed artist just cancelled" : "An artist cancelled their request",
+    body: `${r.name} · ${dateLabel}${r.slotTime ? ` · ${r.slotTime}` : ""}${wasConfirmed ? " — that slot is open again." : ""}`,
+    tag: "artist-cancelled",
+  }).catch(() => {});
+  if (mailerEnabled()) {
+    sendEmail({
+      to: config.infoEmail,
+      subject: `${wasConfirmed ? "Confirmed artist cancelled" : "Request cancelled"}: ${r.name}, ${dateLabel}`,
+      text: `${r.name} just cancelled ${wasConfirmed ? "their confirmed set" : "their pending request"} for ${dateLabel}${r.slotTime ? ` (${r.slotTime})` : ""}.${wasConfirmed ? " That slot is open again on the calendar." : ""}`,
+    }).catch(() => {});
+  }
+
   res.json({ ok: true, message: "Request cancelled. The night is open again." });
 });
 

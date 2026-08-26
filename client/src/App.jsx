@@ -2845,6 +2845,29 @@ function BioBlock({ text }) {
   );
 }
 
+// The raw importedLastPlayed field only ever reflects whatever it was last
+// set to at import/edit time — it doesn't automatically move forward as
+// future-booked artists actually play their dates. This computes the real
+// most recent PAST play by unioning that field with the artist's own
+// confirmed bookings (matched by account or by name for manual entries).
+function effectiveLastPlayed(a, ctx) {
+  const today = ctx.serverToday || iso(new Date());
+  let last = a.importedLastPlayed || "";
+  const nameLower = (a.name || "").toLowerCase();
+  ctx.requests.forEach((r) => {
+    if (r.status === "approved" && r.date && r.date < today) {
+      if ((r.artistId === a.id || (r.name || "").toLowerCase() === nameLower) && r.date > last) last = r.date;
+    }
+  });
+  Object.entries(ctx.overrides || {}).forEach(([dISO, night]) => {
+    if (dISO >= today) return;
+    (night.slots || []).forEach((s) => {
+      if (s.status === "confirmed" && (s.name || "").toLowerCase() === nameLower && dISO > last) last = dISO;
+    });
+  });
+  return last || null;
+}
+
 function AdminArtists({ ctx }) {
   const importRef = useRef(null);
   const [pendingImport, setPendingImport] = useState(null); // { file, conflicts, stats }
@@ -2915,7 +2938,7 @@ function AdminArtists({ ctx }) {
       instagram: a.instagram || "", facebook: a.facebook || "",
       originalsSets: a.originalsSets ?? "", coversSets: a.coversSets ?? "",
       etransferEmail: a.etransferEmail || "", local: !!a.local,
-      importedLastPlayed: a.importedLastPlayed || "",
+      importedLastPlayed: effectiveLastPlayed(a, ctx) || "",
       bookingPref: a.bookingPref || "rotation",
     });
     setDelArm(null);
@@ -3083,13 +3106,13 @@ function AdminArtists({ ctx }) {
                 {a.links && (a.links.split(/\n+/).map((s) => s.trim()).filter(Boolean).map((lnk, i) => (
                   <div key={i}><a href={lnk.startsWith("http") ? lnk : `https://${lnk}`} target="_blank" rel="noreferrer" style={{ color: T.amber, fontSize: 12.5 }}>{lnk}</a></div>
                 )))}
-                {(String(a.originalsSets ?? "") !== "" || String(a.coversSets ?? "") !== "" || a.contactMethod || a.importedLastPlayed) && (
+                {(String(a.originalsSets ?? "") !== "" || String(a.coversSets ?? "") !== "" || a.contactMethod || effectiveLastPlayed(a, ctx)) && (
                   <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
                     {[
                       String(a.originalsSets ?? "") !== "" && `${a.originalsSets} originals`,
                       String(a.coversSets ?? "") !== "" && `${a.coversSets} covers`,
                       a.contactMethod && `prefers ${a.contactMethod}`,
-                      a.importedLastPlayed && `last played ${fmtLong(parseISO(a.importedLastPlayed))}`,
+                      effectiveLastPlayed(a, ctx) && `last played ${fmtLong(parseISO(effectiveLastPlayed(a, ctx)))}`,
                     ].filter(Boolean).join(" · ")}
                   </div>
                 )}

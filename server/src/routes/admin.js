@@ -62,6 +62,28 @@ async function maybeAutoPromoDraft(date) {
   return buildAndSavePromoDraft(snap, date, lineup);
 }
 
+// Keeps an artist's "last date played" current when a booking for an
+// already-past date gets confirmed (e.g. backfilling a show via manual
+// entry). A future booking isn't "played" yet, so this deliberately skips
+// anything that hasn't happened. The recommendation engine and the venue
+// display both also compute this dynamically from live booking data, so a
+// future confirmation "graduates" into last-played on its own once the date
+// passes — this just keeps the stored field itself in sync for anything that
+// reads it directly (exports, for instance).
+async function bumpLastPlayed(dateISO, { artistId, name } = {}) {
+  if (!dateISO || dateISO >= todayISO()) return;
+  let a = null;
+  if (artistId) a = await getArtist(artistId);
+  if (!a && name) {
+    const [row] = await q("SELECT id FROM artists WHERE lower(name) = lower($1)", [name.trim()]);
+    if (row) a = await getArtist(row.id);
+  }
+  if (!a) return;
+  if (!a.importedLastPlayed || dateISO > a.importedLastPlayed) {
+    await upsertArtist(a.id, { importedLastPlayed: dateISO });
+  }
+}
+
 function publicSnap(snap) {
   return snap; // desk sees everything; shape matches the prototype's state
 }
@@ -108,6 +130,7 @@ adminRoutes.post("/requests/:id/decide", async (req, res) => {
     for (const rid of plan.autoDecline) {
       await updateRequest(rid, { status: "declined", auto: true, autoReason: plan.autoReason });
     }
+    await bumpLastPlayed(target.date, { artistId: target.artistId, name: target.name });
     const artist = target.artistId ? snap.artists[target.artistId] : null;
     const d = confirmEmailDraft({ ...target, slotTime: plan.slotTime }, artist);
     const draft = await addDraft({ to: target.email, subject: d.subject, body: d.body, kind: "confirmation", label: `Confirmation · ${target.name} · ${fmtLong(target.date)}`, reqId: id });
@@ -258,6 +281,7 @@ adminRoutes.post("/nights/:date/manual", async (req, res) => {
   }];
   await upsertNight(date, { slots });
   await audit(req.adminEmail, "night.manual.add", "night", date, { name: name.trim() });
+  if (finalStatus === "confirmed") await bumpLastPlayed(date, { name: name.trim() });
   const promoDraft = finalStatus === "confirmed" ? await maybeAutoPromoDraft(date) : null;
   res.json({ ok: true, slots, promoDraft });
 });
@@ -289,6 +313,7 @@ adminRoutes.post("/nights/:date/manual/:idx/status", async (req, res) => {
     const d = confirmEmailDraft({ name: target.name, date, slotTime: target.slotTime, setType: target.setType, email: target.email, recording: null }, null);
     draft = await addDraft({ to: target.email, subject: d.subject, body: d.body, kind: "confirmation", label: `Confirmation · ${target.name} · ${fmtLong(date)}` });
   }
+  if (status === "confirmed") await bumpLastPlayed(date, { name: target.name });
   const promoDraft = status === "confirmed" ? await maybeAutoPromoDraft(date) : null;
   res.json({ ok: true, slots, draft, promoDraft });
 });
@@ -699,6 +724,7 @@ adminRoutes.post("/recommend/tentative/confirm", async (req, res) => {
   await upsertNight(date, { slots });
   await clearTentative(artistId, date);
   await audit(req.adminEmail, "recommend.tentative.confirm", "artist", artistId, { date, slotTime, setType: finalSetType });
+  await bumpLastPlayed(date, { artistId });
 
   let draft = null;
   if (a.email) {
