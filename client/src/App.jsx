@@ -524,15 +524,32 @@ export default function App() {
       return within(r.date);
     });
     if (hit) return hit.date;
+    // Manual calendar entries and tentative-hold confirmations don't appear
+    // in `requests` — check the public calendar (confirmed bookings only,
+    // always available regardless of session) for a name match too.
+    const nameLower = (artistId && artists[artistId]?.name || "").trim().toLowerCase();
+    if (nameLower) {
+      for (const night of calendar) {
+        if (night.dateISO === dateISO) continue;
+        const matched = (night.entries || []).some((e) => (e.name || "").trim().toLowerCase() === nameLower);
+        if (matched && within(night.dateISO)) return night.dateISO;
+      }
+    }
     const lastPlayed = artistId && artists[artistId]?.importedLastPlayed;
     if (lastPlayed && within(lastPlayed)) return lastPlayed;
     return null;
   }
 
   function hasPlayed(artistId) {
-    const today = iso(new Date());
-    if (artists[artistId]?.importedLastPlayed) return true;
-    return requests.some((r) => r.artistId === artistId && r.status === "approved" && r.date < today);
+    const a = artists[artistId];
+    if (a?.importedLastPlayed) return true;
+    const nameLower = (a?.name || "").trim().toLowerCase();
+    const byRequest = requests.some((r) => r.status === "approved" && r.date &&
+      (r.artistId === artistId || (nameLower && (r.name || "").trim().toLowerCase() === nameLower)));
+    if (byRequest) return true;
+    if (!nameLower) return false;
+    return Object.values(overrides || {}).some((night) =>
+      (night.slots || []).some((s) => s.status === "confirmed" && (s.name || "").trim().toLowerCase() === nameLower));
   }
 
   function takenSlots(dateISO) {

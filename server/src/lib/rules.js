@@ -95,6 +95,21 @@ export function cooldownBlock(snap, artistId, email, dateISO) {
   });
   if (hit) return hit.date;
 
+  // Manual calendar entries and tentative-hold confirmations never appear in
+  // `requests` at all — they're night slots matched by name only. Without
+  // this, an artist booked that way could be double-booked inside the
+  // spacing window without the rule ever seeing the conflict.
+  const nameLower = (artistId && snap.artists[artistId]?.name || "").trim().toLowerCase();
+  if (nameLower) {
+    for (const [dISO, night] of Object.entries(snap.nights)) {
+      if (dISO === dateISO) continue; // a second set the same night is fine
+      const matched = (night.slots || []).some((s) => s.status === "confirmed" && (s.name || "").trim().toLowerCase() === nameLower);
+      if (!matched) continue;
+      const diff = Math.abs(daysBetween(dateISO, dISO));
+      if (diff > 0 && diff <= AUTO_DECLINE_DAYS) return dISO;
+    }
+  }
+
   // A manually-set "last played" date (a Saturday show, another event type,
   // or a date carried from the booking doc during the live transition) also
   // triggers the same spacing, even though it isn't itself an approved
@@ -108,9 +123,19 @@ export function cooldownBlock(snap, artistId, email, dateISO) {
 }
 
 export function hasPlayed(snap, artistId, today) {
-  if (snap.artists[artistId]?.importedLastPlayed) return true;
+  const a = snap.artists[artistId];
+  if (a?.importedLastPlayed) return true;
+  const nameLower = (a?.name || "").trim().toLowerCase();
   // A confirmed date (past OR future) means they're no longer a new inquiry.
-  return snap.requests.some((r) => r.artistId === artistId && r.status === "approved" && r.date);
+  // Matched by artistId for app-submitted requests, and by name for manual
+  // calendar entries and tentative-hold confirmations, neither of which carry
+  // an artistId on the booking itself.
+  const byRequest = snap.requests.some((r) => r.status === "approved" && r.date &&
+    (r.artistId === artistId || (nameLower && (r.name || "").trim().toLowerCase() === nameLower)));
+  if (byRequest) return true;
+  if (!nameLower) return false;
+  return Object.values(snap.nights).some((night) =>
+    (night.slots || []).some((s) => s.status === "confirmed" && (s.name || "").trim().toLowerCase() === nameLower));
 }
 
 /* An artist is local when their city is within ~20 min of Stratford, or (for

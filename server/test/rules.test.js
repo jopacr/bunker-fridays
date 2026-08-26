@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   checkSubmission, planConfirmation, takenSlots, suggestFridays,
-  cooldownBlock, writersNight, artistUnavailableOn, nightConfirmedLineup,
+  cooldownBlock, writersNight, artistUnavailableOn, nightConfirmedLineup, hasPlayed,
 } from "../src/lib/rules.js";
 import { runRecommendations, explainEligibility } from "../src/lib/recommend.js";
 import { standardizeBio, nightPromoEmailDraft } from "../src/lib/drafts.js";
@@ -444,6 +444,17 @@ test("cooldownBlock also honors a manually-set last-played date (e.g. a Saturday
   assert.equal(cooldownBlock(s, "a1", "a1@x.com", F1), null, "the same date (a second set that night) is not blocked");
 });
 
+test("cooldownBlock also catches a manual/tentative-confirmed booking, not just app requests", () => {
+  const s = snap({
+    artists: { a1: artist("a1", { name: "Jadeyn Snider" }) },
+    requests: [],
+    nights: { [F1]: { closed: false, slots: [{ name: "Jadeyn Snider", setType: "covers", status: "confirmed", slotTime: "8PM", source: "website inquiry" }] } },
+  });
+  assert.equal(cooldownBlock(s, "a1", "a1@x.com", addDays(F1, 10)), F1, "a manual booking 10 days out still blocks a too-close new request");
+  assert.equal(cooldownBlock(s, "a1", "a1@x.com", addDays(F1, 35)), null, "outside the window is fine");
+  assert.equal(cooldownBlock(s, "a1", "a1@x.com", F1), null, "the same night is not a conflict with itself");
+});
+
 /* ---------- fully-booked lineup email ---------- */
 
 test("nightConfirmedLineup only returns a full night once all 3 sets are confirmed, sorted by time", () => {
@@ -518,4 +529,31 @@ test("nightPromoEmailDraft flags missing bio/photo per artist and notes the EPK 
   assert.match(d.body, /may still be available directly from the artist/, "mentions the EPK/email fallback since something's missing");
   const noneMissing = nightPromoEmailDraft("Friday, June 12, 2026", false, [lineup[0]]);
   assert.ok(!noneMissing.body.includes("may still be available directly from the artist"), "fallback note omitted when nothing is missing");
+});
+
+/* ---------- hasPlayed / NEW badge ---------- */
+
+test("hasPlayed recognizes a manual calendar booking matched by name, not just app requests tied to artistId", () => {
+  // Jadeyn Snider played via a manual calendar entry, not an app-submitted
+  // request — so there's nothing in `requests` tying her artistId to a date.
+  const s = snap({
+    artists: { a1: artist("a1", { name: "Jadeyn Snider" }) },
+    requests: [],
+    nights: { [F1]: { closed: false, slots: [{ name: "Jadeyn Snider", setType: "covers", status: "confirmed", slotTime: "8PM", source: "website inquiry" }] } },
+  });
+  assert.equal(hasPlayed(s, "a1"), true, "a manual booking under their name still counts as having played");
+});
+
+test("hasPlayed recognizes a tentative-hold confirmation, which also has no artistId on the booking itself", () => {
+  const s = snap({
+    artists: { a1: artist("a1", { name: "Wild Waters" }) },
+    requests: [],
+    nights: { [F1]: { closed: false, slots: [{ name: "Wild Waters", setType: "covers", status: "confirmed", slotTime: "9PM", source: "tentative-confirmed" }] } },
+  });
+  assert.equal(hasPlayed(s, "a1"), true);
+});
+
+test("hasPlayed is false for a genuinely new artist with no bookings anywhere", () => {
+  const s = snap({ artists: { a1: artist("a1", { name: "Brand New Act" }) }, requests: [], nights: {} });
+  assert.equal(hasPlayed(s, "a1"), false);
 });
