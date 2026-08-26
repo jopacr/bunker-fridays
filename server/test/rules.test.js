@@ -254,6 +254,65 @@ test("an unclear-capability artist is still recommended once no clear-capability
   assert.equal(originalsPick.unclearSetType, true, "flagged so the venue knows this is an unconfirmed capability");
 });
 
+test("a covers-only artist is still recommended for the last open slot even when it's originals-leaning, as long as the 2-originals cap isn't hit", () => {
+  // 1 covers + 1 originals already confirmed; only a covers-only artist is
+  // available for the last slot. It must NOT be omitted just because the
+  // remaining slot's time (9PM/10PM) leans originals by house convention.
+  const s = snap({
+    artists: { a1: artist("a1", { originalsSets: "0", coversSets: "1", talentScore: 3, drawScore: 3 }) },
+    nights: {
+      [F1]: {
+        closed: false,
+        slots: [
+          { name: "Covers Act", setType: "covers", status: "confirmed", slotTime: "8PM" },
+          { name: "Originals Act", setType: "single-originals", status: "confirmed", slotTime: "9PM" },
+        ],
+      },
+    },
+  });
+  const nights = runRecommendations(s, CFG, 1, TODAY);
+  const lastPick = nights[0].picks.find((p) => p.slot.label === "10PM");
+  assert.equal(lastPick.name, "Artist a1", "covers-only artist is recommended, not omitted");
+  assert.equal(lastPick.slot.type, "covers", "billed as covers since they can't do originals");
+});
+
+test("originals capacity is a hard cap of 2 per night — never a 3rd, even if an originals-capable artist is available", () => {
+  const s = snap({
+    artists: { a1: artist("a1", { originalsSets: "2", coversSets: "0", talentScore: 5, drawScore: 5 }) },
+    nights: {
+      [F1]: {
+        closed: false,
+        slots: [
+          { name: "Originals One", setType: "single-originals", status: "confirmed", slotTime: "9PM" },
+          { name: "Originals Two", setType: "single-originals", status: "confirmed", slotTime: "10PM" },
+        ],
+      },
+    },
+  });
+  const nights = runRecommendations(s, CFG, 1, TODAY);
+  const lastPick = nights[0].picks.find((p) => p.slot.label === "8PM");
+  // a1 can only do originals and the cap is already hit — correctly excluded, not just deprioritized.
+  assert.equal(lastPick.name, null, "an originals-only artist can't fill the last slot once 2 originals are already booked");
+});
+
+test("a both-capable artist is still preferred toward originals when budget remains and the slot leans that way", () => {
+  const s = snap({
+    artists: {
+      both: artist("both", { originalsSets: "1", coversSets: "1", talentScore: 3, drawScore: 3, importedLastPlayed: "2025-01-03" }),
+      coversOnly: artist("coversOnly", { originalsSets: "0", coversSets: "1", talentScore: 3, drawScore: 3, importedLastPlayed: "2025-01-03" }),
+    },
+    // 8PM already confirmed so only 9PM (originals-leaning) is contested.
+    nights: { [F1]: { closed: false, slots: [{ name: "House Act", setType: "covers", status: "confirmed", slotTime: "8PM" }] } },
+  });
+  const nights = runRecommendations(s, CFG, 1, TODAY);
+  const ninePmPick = nights[0].picks.find((p) => p.slot.label === "9PM");
+  assert.equal(ninePmPick.name, "Artist both", "with a tie in score, the both-capable artist is preferred for the originals-leaning slot");
+  assert.equal(ninePmPick.slot.type, "originals");
+  const tenPmPick = nights[0].picks.find((p) => p.slot.label === "10PM");
+  assert.equal(tenPmPick.name, "Artist coversOnly", "the covers-only artist is still recommended for the remaining slot, not omitted");
+  assert.equal(tenPmPick.slot.type, "covers");
+});
+
 test("explainEligibility reports the real blocking reason for a specific date", () => {
   const s = snap({
     artists: { a1: artist("a1", { importedLastPlayed: "2026-05-01" }) },

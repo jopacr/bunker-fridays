@@ -92,28 +92,38 @@ function dateExclusions(snap, cfg, a, dISO, { includeSoftPass } = {}) {
 function nightSlots(entries, confirmed, writers) {
   if (writers) {
     const slots = [];
-    for (let k = confirmed.length; k < 3; k++) slots.push({ type: "originals", label: `Round seat ${k + 1}`, writers: true });
+    for (let k = confirmed.length; k < 3; k++) slots.push({ preferredType: "originals", label: `Round seat ${k + 1}`, writers: true });
     return slots;
   }
   const takenTimes = new Set(confirmed.filter((e) => e.slotTime).map((e) => e.slotTime));
   const untimed = confirmed.filter((e) => !e.slotTime).length;
   const openTimes = SLOT_TIMES.filter((t) => !takenTimes.has(t)).slice(untimed);
-  const origCap = 2 - confirmed.filter((e) => e.setType === "single-originals").length;
   const totalOpen = 3 - confirmed.length;
-  // 9PM is the originals seat; a second originals (if capacity) goes to 10PM,
-  // so 8PM stays a covers slot (covers preferred at 8PM).
-  const origByTime = ["9PM", "10PM", "8PM"].filter((t) => openTimes.includes(t)).slice(0, Math.max(0, origCap));
+  // preferredType is a SOFT hint only, not a hard requirement: 9PM/10PM lean
+  // originals, 8PM leans covers, per house convention. It nudges scoring and
+  // decides how a flexible (both-capable) artist gets billed — it never
+  // excludes a covers-only artist from a slot just because 9PM/10PM was the
+  // "ideal" type for it. The real hard limit (max 2 originals/night) is
+  // enforced separately via the originals budget in runRecommendations.
   const slots = [];
   for (let k = 0; k < totalOpen; k++) {
     const time = openTimes[k] || "TBD";
-    const type = origByTime.includes(time) ? "originals" : "covers";
-    slots.push({ type, label: time, writers: false });
+    const preferredType = (time === "9PM" || time === "10PM") ? "originals" : "covers";
+    slots.push({ preferredType, label: time, writers: false });
   }
   return slots;
 }
 
+const ORIGINALS_PREFERENCE_BONUS = 1; // tie-breaker nudge toward filling originals capacity, never a hard requirement
+
 // Runs the full 4-way (avoidConflict x requireNew) cascade against a pool,
 // optionally allowing "unclear" (blank field) candidates for the slot's style.
+// Eligibility here is deliberately soft on TYPE: a covers-only artist is never
+// excluded just because 9PM/10PM is the "ideal" slot for originals — the only
+// hard constraint is the night's originals budget (max 2/night, tracked in
+// ctx.originalsBudget). Once that budget is used up, only covers-capable
+// artists remain eligible for whatever's left, since there's nowhere left to
+// put an originals-only artist.
 function searchPass(elig, slot, ctx, allowUnclear) {
   let best = null;
   const run = (avoidConflict, requireNew) => {
@@ -121,15 +131,26 @@ function searchPass(elig, slot, ctx, allowUnclear) {
       if (ctx.used.has(a.name)) continue;
       if (requireNew && !a.isNew) continue;
       if (ctx.usedNew && a.isNew) continue;
-      const capable = slot.type === "covers" ? a.canC : slot.type === "originals" ? a.canO : true;
+
+      let capable, clear;
+      if (slot.writers) {
+        capable = a.canO; clear = a.oClear;
+      } else if (ctx.originalsBudget > 0) {
+        capable = a.canO || a.canC;
+        clear = (a.canO && a.oClear) || (a.canC && a.cClear);
+      } else {
+        capable = a.canC; clear = a.cClear;
+      }
       if (!capable) continue;
-      const clear = slot.type === "covers" ? a.cClear : slot.type === "originals" ? a.oClear : true;
       if (!clear && !allowUnclear) continue;
       if (avoidConflict && a.companions.some((c) => ctx.used.has(c))) continue;
+
       let sc = a.base;
       if (!ctx.hasLocal && a.local) sc += ctx.cfg.localBonus;
       if (!ctx.hasNew && a.isNew) sc += ctx.cfg.newArtistBonus;
-      if (slot.type === "originals" && a.isNew) sc += ctx.cfg.newOriginalsBonus;
+      const wouldPreferOriginals = !slot.writers && ctx.originalsBudget > 0 && slot.preferredType === "originals" && a.canO;
+      if (wouldPreferOriginals) sc += ORIGINALS_PREFERENCE_BONUS;
+      if ((slot.writers || wouldPreferOriginals) && a.isNew) sc += ctx.cfg.newOriginalsBonus;
       sc -= a.rec * ctx.cfg.recencyPenalty;
       if (!best || sc > best.sc) best = { a, sc, unclear: !clear };
     }
@@ -177,18 +198,34 @@ export function runRecommendations(snap, cfg, weeks, today) {
     // Artists already confirmed on this night count for the companion check
     const used = new Set(confirmed.map((e) => e.name));
     let usedNew = false, firstSlot = true, hasLocal = false, hasNew = false;
+    // Hard limit: max 2 originals sets per night (the $50 guarantee makes a
+    // 3rd too costly). Everything else about originals is a soft preference.
+    let originalsBudget = 2 - confirmed.filter((e) => e.setType === "single-originals").length;
     const picks = [];
 
     for (const slot of slots) {
       const wantNew = firstSlot && eligStrict.some((a) => a.isNew && !used.has(a.name));
-      const ctx = { used, usedNew, hasLocal, hasNew, wantNew, cfg };
+      const ctx = { used, usedNew, hasLocal, hasNew, wantNew, cfg, originalsBudget };
       let best = findBest(eligStrict, slot, ctx);
       let softPick = false;
       if (!best) { best = findBest(eligWithSoft, slot, ctx); softPick = !!best; }
 
       if (best) {
+        // Decide what this pick is actually billed as, now that we know who
+        // it is. An originals-only artist has to go originals (eligibility
+        // already confirmed the budget allows it). Otherwise, only bill them
+        // as originals if budget remains AND this was an originals-leaning
+        // slot (9PM/10PM) — covers-preferred slots (8PM) and exhausted budget
+        // both fall back to covers, never to excluding the artist outright.
+        let assignedType;
+        if (slot.writers) assignedType = "originals";
+        else if (!best.a.canC) assignedType = "originals";
+        else if (originalsBudget > 0 && best.a.canO && slot.preferredType === "originals") assignedType = "originals";
+        else assignedType = "covers";
+        if (assignedType === "originals") originalsBudget--;
+
         picks.push({
-          slot, name: best.a.name, score: Math.round(best.sc * 10) / 10,
+          slot: { ...slot, type: assignedType }, name: best.a.name, score: Math.round(best.sc * 10) / 10,
           email: best.a.email, phone: best.a.phone, account: best.a.account,
           artistId: best.a.id, isNew: best.a.isNew, local: best.a.local,
           unclearSetType: best.unclear, softPassed: softPick,
@@ -198,7 +235,7 @@ export function runRecommendations(snap, cfg, weeks, today) {
         if (best.a.isNew) { usedNew = true; hasNew = true; best.a.isNew = false; }
         if (best.a.local) hasLocal = true;
       } else {
-        picks.push({ slot, name: null });
+        picks.push({ slot: { ...slot, type: slot.preferredType }, name: null });
       }
       firstSlot = false;
     }
