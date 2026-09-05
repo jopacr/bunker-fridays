@@ -49,7 +49,7 @@ export function requestFromRow(r) {
 }
 
 export function nightFromRow(r) {
-  return { closed: !!r.closed, writersOverride: r.writers_override, slots: r.manual_slots || [], note: r.note || "" };
+  return { closed: !!r.closed, writersOverride: r.writers_override, slots: r.manual_slots || [], note: r.note || "", reviewed: !!r.reviewed };
 }
 
 export function draftFromRow(r) {
@@ -178,7 +178,7 @@ export async function insertRequest(r, run = q) {
 export async function updateRequest(id, fields, run = q) {
   const map = {
     status: "status", slotTime: "slot_time", declineReason: "decline_reason",
-    auto: "auto", autoReason: "auto_reason", cancelledBy: "cancelled_by",
+    auto: "auto", autoReason: "auto_reason", cancelledBy: "cancelled_by", setType: "set_type",
   };
   const sets = [], vals = [];
   let i = 1;
@@ -205,12 +205,13 @@ export async function upsertNight(date, fields, run = q) {
     writers_override: "writersOverride" in fields ? fields.writersOverride : cur?.writers_override ?? null,
     manual_slots: JSON.stringify(fields.slots ?? cur?.manual_slots ?? []),
     note: fields.note ?? cur?.note ?? null,
+    reviewed: fields.reviewed ?? cur?.reviewed ?? false,
   };
   await run(
-    `INSERT INTO nights (date, closed, writers_override, manual_slots, note, updated)
-     VALUES ($1,$2,$3,$4,$5, now())
-     ON CONFLICT (date) DO UPDATE SET closed=$2, writers_override=$3, manual_slots=$4, note=$5, updated=now()`,
-    [date, next.closed, next.writers_override, next.manual_slots, next.note]
+    `INSERT INTO nights (date, closed, writers_override, manual_slots, note, reviewed, updated)
+     VALUES ($1,$2,$3,$4,$5,$6, now())
+     ON CONFLICT (date) DO UPDATE SET closed=$2, writers_override=$3, manual_slots=$4, note=$5, reviewed=$6, updated=now()`,
+    [date, next.closed, next.writers_override, next.manual_slots, next.note, next.reviewed]
   );
 }
 

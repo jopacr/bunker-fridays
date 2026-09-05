@@ -2258,6 +2258,8 @@ function AdminInbox({ ctx }) {
 
 function AdminCalendar({ ctx }) {
   const [showPast, setShowPast] = useState(false);
+  const [reviewOpenFor, setReviewOpenFor] = useState(null); // dateISO of the night being reviewed
+  const [reviewNotes, setReviewNotes] = useState({}); // artistId -> draft note text
   const todayISOStr = ctx.serverToday || iso(new Date());
   const baseFridays = fridaysAhead(120);
   // Make sure any confirmed booking that lands past the 120-day window still
@@ -2287,7 +2289,6 @@ function AdminCalendar({ ctx }) {
   })();
   const [adding, setAdding] = useState(null);
   const [f, setF] = useState({ name: "", email: "", setType: "covers", status: "confirmed", slotTime: "" });
-  const [setTypeTouched, setSetTypeTouched] = useState(false);
   const [removeArm, setRemoveArm] = useState(null); // "dateISO|idx"
   const [timesOpen, setTimesOpen] = useState(null); // dateISO
   const [calDrafts, setCalDrafts] = useState([]);
@@ -2331,7 +2332,7 @@ function AdminCalendar({ ctx }) {
     try {
       await ctx.api.addManual(adding, { name: f.name.trim(), email: f.email.trim(), setType: f.setType, status: f.status, slotTime: f.slotTime || null });
       await ctx.refreshDesk();
-      setAdding(null); setF({ name: "", email: "", setType: "covers", status: "confirmed", slotTime: "" }); setSetTypeTouched(false);
+      setAdding(null); setF({ name: "", email: "", setType: "covers", status: "confirmed", slotTime: "" });
       ctx.flash("Logged. The calendar updated for everyone.");
     } catch (e) { ctx.flash(e.message || "Could not log that entry."); }
   }
@@ -2415,6 +2416,75 @@ function AdminCalendar({ ctx }) {
               }
               return null;
             })()}
+            {(() => {
+              const confirmed = entries.filter((e) => e.status === "confirmed");
+              if (!confirmed.length || dISO > todayISOStr) return null; // only relevant once the night has actually happened
+              const isReviewed = !!ctx.overrides[dISO]?.reviewed;
+              if (isReviewed) {
+                return (
+                  <div style={{ marginTop: 6 }}>
+                    <button onClick={async () => {
+                      try { await ctx.api.reviewNight(dISO, false); await ctx.refreshDesk(); ctx.flash("Reopened for review."); }
+                      catch (er) { ctx.flash(er.message || "Could not update."); }
+                    }} style={{ ...st.ghostBtn, fontSize: 11, padding: "3px 9px", borderColor: T.green, color: T.green }}>Reviewed ✓ — tap to reopen</button>
+                  </div>
+                );
+              }
+              if (reviewOpenFor !== dISO) {
+                return (
+                  <div style={{ marginTop: 6 }}>
+                    <button onClick={() => setReviewOpenFor(dISO)} style={{ ...st.ghostBtn, fontSize: 11, padding: "3px 9px", borderColor: T.amber, color: T.amber }}>Review before closing out this night</button>
+                  </div>
+                );
+              }
+              // Open review panel: score + note editor for each confirmed artist.
+              const named = confirmed.map((e) => {
+                const match = Object.values(ctx.artists).find((a) => (a.name || "").trim().toLowerCase() === (e.name || "").trim().toLowerCase());
+                return { entryName: e.name, artist: match || null };
+              });
+              return (
+                <div style={{ marginTop: 8, padding: 10, border: `1px solid ${T.amber}`, borderRadius: 8 }}>
+                  <div style={{ fontSize: 12.5, color: T.amber, fontWeight: 700, marginBottom: 6 }}>Review this night before closing it out</div>
+                  {named.map(({ entryName, artist }, i) => (
+                    <div key={i} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: i < named.length - 1 ? `1px solid ${T.line}` : "none" }}>
+                      <div style={{ color: T.cream, fontWeight: 700, fontSize: 13 }}>{entryName}</div>
+                      {artist ? (
+                        <>
+                          <ScoreRow ctx={ctx} a={artist} field="drawScore" label="Draw" />
+                          <ScoreRow ctx={ctx} a={artist} field="talentScore" label="Talent" />
+                          <textarea
+                            placeholder="Notes on the performance, draw, anything worth remembering..."
+                            value={reviewNotes[artist.id] ?? artist.adminNotes ?? ""}
+                            onChange={(ev) => setReviewNotes((p) => ({ ...p, [artist.id]: ev.target.value }))}
+                            onBlur={async () => {
+                              const text = (reviewNotes[artist.id] ?? artist.adminNotes ?? "").trim();
+                              if (text === (artist.adminNotes || "")) return;
+                              try { await ctx.api.saveArtist(artist.id, { adminNotes: text }); await ctx.refreshDesk(); }
+                              catch (er) { ctx.flash(er.message || "Could not save note."); }
+                            }}
+                            rows={2}
+                            style={{ ...st.input, width: "100%", boxSizing: "border-box", marginTop: 6, resize: "vertical", fontSize: 12.5 }}
+                          />
+                        </>
+                      ) : (
+                        <div style={{ fontSize: 11.5, color: T.muted, marginTop: 3 }}>No matching artist record — nothing to score here.</div>
+                      )}
+                    </div>
+                  ))}
+                  <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                    <button onClick={async () => {
+                      try {
+                        await ctx.api.reviewNight(dISO, true);
+                        await ctx.refreshDesk();
+                        setReviewOpenFor(null);
+                        ctx.flash("Night reviewed. Scores saved and last-played dates updated.");
+                      } catch (er) { ctx.flash(er.message || "Could not mark reviewed."); }
+                    }} style={st.amberBtn}>Mark reviewed & close</button>
+                    <button onClick={() => setReviewOpenFor(null)} style={st.ghostBtn}>Cancel</button>
+                  </div>
+                </div>
+              );
+            })()}
             <div style={{ fontSize: 12.5, color: T.muted, marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
               {(() => {
                 const holdEntries = ctx.tentatives.filter((t) => t.dateISO === dISO).map((t) => ({
@@ -2464,7 +2534,9 @@ function AdminCalendar({ ctx }) {
                 }
                 async function changeSetType(newType) {
                   try {
-                    await ctx.api.setManualSetType(dISO, e.manualIndex, newType);
+                    if (e.manual) await ctx.api.setManualSetType(dISO, e.manualIndex, newType);
+                    else if (e.reqId) await ctx.api.setRequestSetType(e.reqId, newType);
+                    else return;
                     await ctx.refreshDesk();
                     ctx.flash(`${e.name} updated to ${SET_LABELS[newType] || newType}.`);
                   } catch (er) { ctx.flash(er.message || "Could not update set type."); }
@@ -2512,7 +2584,7 @@ function AdminCalendar({ ctx }) {
                     {e.isTentativeHold && (
                       <button onClick={clearHold} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px" }}>Clear</button>
                     )}
-                    {!e.isTentativeHold && e.manual && !writers && (
+                    {!e.isTentativeHold && !writers && (e.manual || e.reqId) && (
                       <button onClick={() => changeSetType(e.setType === "single-originals" ? "covers" : "single-originals")} style={{ ...st.ghostBtn, fontSize: 10.5, padding: "1px 7px" }}>
                         {e.setType === "single-originals" ? "Mark covers" : "Mark originals"}
                       </button>
@@ -2601,7 +2673,7 @@ function AdminCalendar({ ctx }) {
                 <input placeholder="Artist name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={st.input} />
                 <input placeholder="Email (optional — needed to send a confirmation later)" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={st.input} />
                 <div style={{ display: "flex", gap: 8 }}>
-                  <select value={f.setType} onChange={(e) => { setSetTypeTouched(true); setF({ ...f, setType: e.target.value }); }} style={{ ...st.input, flex: 1, minWidth: 0 }}>
+                  <select value={f.setType} onChange={(e) => setF({ ...f, setType: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }}>
                     <option value="single-originals">Originals set</option>
                     <option value="covers">Covers set</option>
                     <option value="writers-round">Writers Round</option>
@@ -2611,19 +2683,16 @@ function AdminCalendar({ ctx }) {
                     <option value="pending">Pending (they've asked, awaiting our decision)</option>
                     <option value="tentative">Tentative (we've reached out, no commitment yet)</option>
                   </select>
-                  <select value={f.slotTime} onChange={(e) => {
-                    const t = e.target.value;
-                    // Nudge the set type toward house convention (9PM = originals)
-                    // unless the venue has already picked one on purpose.
-                    const suggested = t === "9PM" ? "single-originals" : t === "8PM" || t === "10PM" ? "covers" : f.setType;
-                    setF({ ...f, slotTime: t, setType: setTypeTouched ? f.setType : suggested });
-                  }} style={{ ...st.input, flex: 1, minWidth: 0 }}>
+                  <select value={f.slotTime} onChange={(e) => setF({ ...f, slotTime: e.target.value })} style={{ ...st.input, flex: 1, minWidth: 0 }}>
                     <option value="">No set time</option>
                     {SLOT_TIMES.filter((t) => !entries.some((e) => e.status === "confirmed" && e.slotTime === t)).map((t) => (
                       <option key={t} value={t}>{t}</option>
                     ))}
                   </select>
                 </div>
+                {f.slotTime === "9PM" && f.setType !== "single-originals" && (
+                  <div style={{ fontSize: 11, color: T.muted, marginTop: -4 }}>9PM is usually the originals slot — just a heads up, not a requirement. Your set type choice above is always respected.</div>
+                )}
                 <button onClick={addManual} style={st.amberBtn}>Add to night</button>
               </div>
             )}
@@ -2885,6 +2954,35 @@ function effectiveLastPlayed(a, ctx) {
   return last || null;
 }
 
+async function setArtistScore(ctx, id, field, value) {
+  const current = ctx.artists[id]?.[field];
+  const next = current === value ? null : value; // tap same to clear; 0 is a real rating
+  try { await ctx.api.saveArtist(id, { [field]: next }); await ctx.refreshDesk(); }
+  catch (e) { ctx.flash(e.message || "Could not save score."); }
+}
+
+function ScoreRow({ ctx, a, field, label }) {
+  const val = a[field];
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5 }}>
+      <span style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: T.muted, width: 48 }}>{label}</span>
+      {[0, 1, 2, 3].map((n) => {
+        const active = n === 0 ? val === 0 : (typeof val === "number" && val >= n);
+        return (
+          <button key={n} onClick={() => setArtistScore(ctx, a.id, field, n)} style={{
+            width: 26, height: 26, borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700,
+            fontFamily: "'Karla', sans-serif",
+            background: active ? T.amber : "transparent",
+            color: active ? T.ink : T.muted,
+            border: active ? `1px solid ${T.amber}` : `1px solid ${T.line}`,
+            padding: 0,
+          }}>{n}</button>
+        );
+      })}
+    </div>
+  );
+}
+
 function AdminArtists({ ctx }) {
   const importRef = useRef(null);
   const [pendingImport, setPendingImport] = useState(null); // { file, conflicts, stats }
@@ -2999,35 +3097,6 @@ function AdminArtists({ ctx }) {
     catch (e) { ctx.flash(e.message || "Could not save note."); return; }
     setNoteEdit((p) => { const n = { ...p }; delete n[id]; return n; });
     ctx.flash("Note saved. Only the venue desk sees these.");
-  }
-
-  async function setScore(id, field, value) {
-    const current = ctx.artists[id]?.[field];
-    const next = current === value ? null : value; // tap same to clear; 0 is a real rating
-    try { await ctx.api.saveArtist(id, { [field]: next }); await ctx.refreshDesk(); }
-    catch (e) { ctx.flash(e.message || "Could not save score."); }
-  }
-
-  function ScoreRow({ a, field, label }) {
-    const val = a[field];
-    return (
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5 }}>
-        <span style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: T.muted, width: 48 }}>{label}</span>
-        {[0, 1, 2, 3].map((n) => {
-          const active = n === 0 ? val === 0 : (typeof val === "number" && val >= n);
-          return (
-            <button key={n} onClick={() => setScore(a.id, field, n)} style={{
-              width: 26, height: 26, borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700,
-              fontFamily: "'Karla', sans-serif",
-              background: active ? T.amber : "transparent",
-              color: active ? T.ink : T.muted,
-              border: active ? `1px solid ${T.amber}` : `1px solid ${T.line}`,
-              padding: 0,
-            }}>{n}</button>
-          );
-        })}
-      </div>
-    );
   }
 
   return (
@@ -3215,8 +3284,8 @@ function AdminArtists({ ctx }) {
                 )}
                 {!editing && editId !== a.id && (
                   <div style={{ marginTop: 8 }}>
-                    <ScoreRow a={a} field="drawScore" label="Draw" />
-                    <ScoreRow a={a} field="talentScore" label="Talent" />
+                    <ScoreRow ctx={ctx} a={a} field="drawScore" label="Draw" />
+                    <ScoreRow ctx={ctx} a={a} field="talentScore" label="Talent" />
                     {Object.keys(ctx.recPasses).filter((k) => k.startsWith(a.id + "|")).length > 0 && (
                       <div style={{ marginTop: 6 }}>
                         <span style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: T.muted }}>Passed dates: </span>

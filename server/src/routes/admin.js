@@ -320,6 +320,13 @@ adminRoutes.post("/nights/:date/manual/:idx/status", async (req, res) => {
 
 // Correct a manual entry's set type after the fact — e.g. it was added as
 // covers by mistake (the form's default) when it's actually an originals set.
+// How many OTHER confirmed sets that night are originals, excluding the one
+// currently being changed (so switching it doesn't count against itself).
+function otherConfirmedOriginals(snap, date, currentSetType) {
+  const total = nightConfirmedLineup(snap, date).filter((e) => e.setType === "single-originals").length;
+  return currentSetType === "single-originals" ? total - 1 : total;
+}
+
 adminRoutes.post("/nights/:date/manual/:idx/settype", async (req, res) => {
   const date = req.params.date;
   const idx = parseInt(req.params.idx, 10);
@@ -329,10 +336,30 @@ adminRoutes.post("/nights/:date/manual/:idx/settype", async (req, res) => {
   const cur = snap.nights[date]?.slots || [];
   if (!(idx >= 0 && idx < cur.length)) return res.status(404).json({ error: "Entry not found." });
   const target = cur[idx];
+  if (setType === "single-originals" && otherConfirmedOriginals(snap, date, target.setType) >= 2) {
+    return res.status(409).json({ error: "That would make 3 originals sets for the night — the cap is 2." });
+  }
   const slots = cur.map((s, i) => (i === idx ? { ...s, setType } : s));
   await upsertNight(date, { slots });
   await audit(req.adminEmail, "night.manual.settype", "night", date, { name: target.name, from: target.setType, to: setType });
   res.json({ ok: true, slots });
+});
+
+// Same override, for a confirmed booking that came through the app rather
+// than a manual entry — the venue should always be able to swap set type
+// regardless of how the booking originated, subject to the same hard cap.
+adminRoutes.post("/requests/:id/settype", async (req, res) => {
+  const { setType } = req.body || {};
+  if (!["covers", "single-originals", "writers-round"].includes(setType)) return res.status(400).json({ error: "Invalid set type." });
+  const target = await getRequest(req.params.id);
+  if (!target || target.status !== "approved") return res.status(404).json({ error: "Confirmed booking not found." });
+  const snap = await snapshot();
+  if (setType === "single-originals" && otherConfirmedOriginals(snap, target.date, target.setType) >= 2) {
+    return res.status(409).json({ error: "That would make 3 originals sets for the night — the cap is 2." });
+  }
+  await updateRequest(target.id, { setType });
+  await audit(req.adminEmail, "request.settype", "request", target.id, { name: target.name, from: target.setType, to: setType });
+  res.json({ ok: true });
 });
 
 // On-demand: (re)draft the lineup email for a night regardless of whether an
@@ -346,6 +373,27 @@ adminRoutes.post("/nights/:date/promo", async (req, res) => {
   const draft = await buildAndSavePromoDraft(snap, date, lineup);
   await audit(req.adminEmail, "night.promo.draft", "night", date, { count: lineup.length });
   res.json({ ok: true, draft });
+});
+
+// Marks a night reviewed — the venue has gone through each confirmed artist's
+// Draw/Talent scores and notes. Also bumps last-played to this date for every
+// confirmed artist that night, so that stays current even if the booking sat
+// unreviewed for a while. Passing { reviewed: false } undoes it.
+adminRoutes.post("/nights/:date/review", async (req, res) => {
+  const date = req.params.date;
+  const markReviewed = req.body?.reviewed !== false;
+  if (markReviewed) {
+    const snap = await snapshot();
+    const lineup = nightConfirmedLineup(snap, date);
+    for (const entry of lineup) {
+      if (entry.artist && (!entry.artist.importedLastPlayed || date > entry.artist.importedLastPlayed)) {
+        await upsertArtist(entry.artist.id, { importedLastPlayed: date });
+      }
+    }
+  }
+  await upsertNight(date, { reviewed: markReviewed });
+  await audit(req.adminEmail, markReviewed ? "night.review" : "night.review.undo", "night", date, {});
+  res.json({ ok: true, reviewed: markReviewed });
 });
 
 adminRoutes.delete("/nights/:date/manual/:idx", async (req, res) => {
